@@ -2,6 +2,7 @@ import { Telegraf } from "telegraf";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage } from "./session.js";
 import { runAgent, extractTextFromResponse } from "./agent.js";
+import { markdownToTelegramHtml } from "./format.js";
 import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
@@ -37,7 +38,7 @@ function splitMessage(text: string): string[] {
 }
 
 /**
- * Send text with parse_mode: "Markdown", falling back to plain text on failure.
+ * Send text with parse_mode: "HTML", falling back to plain text on failure.
  */
 async function editMessageSafe(
   bot: Telegraf,
@@ -45,16 +46,17 @@ async function editMessageSafe(
   messageId: number,
   text: string
 ): Promise<void> {
+  const html = markdownToTelegramHtml(text);
   try {
     await bot.telegram.editMessageText(
       chatId,
       messageId,
       undefined,
-      text,
-      { parse_mode: "Markdown" }
+      html,
+      { parse_mode: "HTML" }
     );
   } catch {
-    // Markdown parse failed — retry as plain text
+    // HTML parse failed — retry as plain text
     try {
       await bot.telegram.editMessageText(
         chatId,
@@ -73,12 +75,13 @@ async function sendMessageSafe(
   chatId: number | string,
   text: string
 ): Promise<void> {
+  const html = markdownToTelegramHtml(text);
   try {
-    await bot.telegram.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
+    await bot.telegram.sendMessage(chatId, html, {
+      parse_mode: "HTML",
     });
   } catch {
-    // Markdown parse failed — retry as plain text
+    // HTML parse failed — retry as plain text
     try {
       await bot.telegram.sendMessage(chatId, text);
     } catch (e2) {
