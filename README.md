@@ -39,6 +39,39 @@ The agent has access to:
 - **write** — create/overwrite files
 - **edit** — find and replace text in files
 
+## Deployment (systemd)
+
+### First-time install
+
+```bash
+# 1. Create .env on the target machine
+sudo -u lin nano /home/lin/patronum/.env
+
+# 2. Run the install script (as root or with sudo)
+sudo bash scripts/install.sh
+```
+
+The install script copies the repo to `/home/lin/patronum/`, builds it, installs a systemd service, and starts it.
+
+> **Note:** The `.env` file is NOT copied automatically — create it manually at `/home/lin/patronum/.env` before starting the service.
+
+### Updating
+
+```bash
+sudo bash scripts/update.sh
+```
+
+Pulls latest changes, rebuilds, and restarts the service.
+
+### Service management
+
+```bash
+systemctl status patronum      # Check status
+systemctl restart patronum     # Restart
+systemctl stop patronum        # Stop
+journalctl -u patronum -f      # Follow logs
+```
+
 ## Architecture
 
 - `telegraf` for Telegram bot

@@ -1,0 +1,17 @@
+[Unit]
+Description=Patronum AI Agent
+After=network.target
+
+[Service]
+Type=simple
+User=lin
+WorkingDirectory=/home/lin/patronum
+ExecStart=/usr/bin/node /home/lin/patronum/dist/index.js
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/home/lin/patronum/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
