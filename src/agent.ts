@@ -2,7 +2,7 @@ import { config } from "./config.js";
 import { loadContextFile } from "./context.js";
 import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
-import { isRestartPending } from "./tools/self-restart.js";
+
 import type {
   Message,
   ClaudeResponse,
@@ -228,11 +228,6 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
     conversation.push(toolResultMessage);
     newMessages.push(toolResultMessage);
 
-    // If self_restart was called, don't send results back to Claude — just stop
-    if (isRestartPending()) {
-      console.log("[agent] Restart pending — short-circuiting agent loop");
-      break;
-    }
   }
 
   return { messages: newMessages, inputTokens: lastInputTokens };

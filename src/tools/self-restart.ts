@@ -1,39 +1,15 @@
 /**
- * self_restart tool — rebuild and restart the bot process.
+ * self_restart tool — request a rebuild and restart.
  *
- * Flow:
- * 1. Run `npm run build` in the source directory
- * 2. If build fails, return error (no restart)
- * 3. Save restart context (what we were doing + what to do next)
- * 4. Set pending flag — bot short-circuits, sends reason, exits
- * 5. On next boot, the resume context is injected back
+ * Writes a .restart-request.json file. A separate watcher process
+ * picks it up, builds, and restarts the service. The bot stays running
+ * until the watcher kills it — no process.exit, no lost messages.
  */
 
-import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import type { ToolHandler } from "../types.js";
-
-let _pendingRestart = false;
-let _restartMessage = "";
-
-/** Check if a restart is pending */
-export function isRestartPending(): boolean {
-  return _pendingRestart;
-}
-
-/** Get the message to send before restarting */
-export function getRestartMessage(): string {
-  return _restartMessage;
-}
-
-/** Execute the pending restart (call after message delivery is confirmed) */
-export function executeRestart(): void {
-  if (!_pendingRestart) return;
-  console.log("[self_restart] Message delivered, exiting for restart...");
-  process.exit(0);
-}
 
 export interface RestartState {
   reason: string;
@@ -47,13 +23,7 @@ function getRestartStatePath(): string {
   return path.join(config.workspace, ".restart-state.json");
 }
 
-/** Save state so we can resume after restart */
-export function saveRestartState(state: RestartState): void {
-  fs.writeFileSync(getRestartStatePath(), JSON.stringify(state, null, 2), "utf-8");
-  console.log(`[self_restart] Saved restart state: ${state.reason}`);
-}
-
-/** Load restart state (called on boot). Consume-once: deletes on second attempt. */
+/** Load restart state on boot. Consume-once: bails if already attempted. */
 export function loadRestartState(): RestartState | null {
   const statePath = getRestartStatePath();
   try {
@@ -63,17 +33,14 @@ export function loadRestartState(): RestartState | null {
     state.attempts = (state.attempts ?? 0) + 1;
 
     if (state.attempts > 1) {
-      // Already tried resuming once — this is a crash loop. Bail out.
       console.warn(`[self_restart] Resume already attempted (attempts=${state.attempts}), deleting stale state`);
       fs.unlinkSync(statePath);
       return null;
     }
 
-    // Write back with incremented attempt count before we try resuming
-    // If we crash during resume, next boot sees attempts=2 and bails
+    // Write back with incremented count — if we crash, next boot sees attempts=2
     fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
     console.log(`[self_restart] Loaded restart state: ${state.reason} (attempt ${state.attempts})`);
-
     return state;
   } catch {
     return null;
@@ -82,12 +49,11 @@ export function loadRestartState(): RestartState | null {
 
 /** Clear restart state after successful resume */
 export function clearRestartState(): void {
-  const statePath = getRestartStatePath();
   try {
-    fs.unlinkSync(statePath);
+    fs.unlinkSync(getRestartStatePath());
     console.log("[self_restart] Restart state cleared (resume successful)");
   } catch {
-    // Already gone, fine
+    // Already gone
   }
 }
 
@@ -95,17 +61,16 @@ export const selfRestartTool: ToolHandler = {
   definition: {
     name: "self_restart",
     description:
-      "Rebuild and restart the bot. Use after editing source code. " +
-      "Runs `npm run build` first — if the build fails, the restart is aborted " +
-      "and you get the build error to fix. If the build succeeds, your message " +
-      "is sent, then the process restarts. After restart, you'll receive the " +
-      "resume context and can continue where you left off.",
+      "Request a rebuild and restart. A separate watcher process will build " +
+      "the project and restart the service. The bot stays running until the " +
+      "new build is ready. After restart, you'll receive the resume context " +
+      "and can continue where you left off.",
     input_schema: {
       type: "object",
       properties: {
         reason: {
           type: "string",
-          description: "Brief reason for restart — this is sent to the user before shutdown",
+          description: "Brief reason for restart — sent to the user before shutdown",
         },
         resume_context: {
           type: "string",
@@ -121,30 +86,29 @@ export const selfRestartTool: ToolHandler = {
   async execute(input: Record<string, unknown>): Promise<string> {
     const reason = (input.reason as string) || "no reason given";
     const resumeContext = (input.resume_context as string) || "";
-    const sourceDir = path.join(config.workspace, "source");
 
-    console.log(`[self_restart] Restart requested: ${reason}`);
+    const requestPath = path.join(config.workspace, ".restart-request.json");
 
-    // Step 1: Build
-    try {
-      console.log("[self_restart] Running npm run build...");
-      execSync("npm run build", {
-        cwd: sourceDir,
-        encoding: "utf-8",
-        timeout: 30_000,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      console.log("[self_restart] Build succeeded");
-    } catch (err: any) {
-      const stderr = err.stderr || err.message || String(err);
-      console.error("[self_restart] Build failed:", stderr);
-      return `Build failed — restart aborted.\n\n${stderr}`;
+    // Check if a restart is already pending
+    if (fs.existsSync(requestPath)) {
+      return "A restart is already pending. Wait for it to complete.";
     }
 
-    // Step 2: Set flag and message — agent loop will short-circuit
-    _pendingRestart = true;
-    _restartMessage = reason;
+    // Get current chat ID from the call context
+    const { getCurrentChatId } = await import("./chat-context.js");
+    const chatId = getCurrentChatId() || config.ownerChatId || "";
 
-    return `__RESTART_PENDING__`;
+    // Write the request file — watcher picks it up
+    const request = {
+      reason,
+      resumeContext,
+      chatId,
+      timestamp: Date.now(),
+    };
+
+    fs.writeFileSync(requestPath, JSON.stringify(request, null, 2), "utf-8");
+    console.log(`[self_restart] Restart requested: ${reason}`);
+
+    return `Restart requested. The watcher will build and restart the service. Reason: ${reason}`;
   },
 };

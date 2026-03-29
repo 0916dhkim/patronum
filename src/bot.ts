@@ -7,16 +7,7 @@ import { runAgentWithSnapshot } from "./run-agent.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
-import {
-  isRestartPending,
-  executeRestart,
-  getRestartMessage,
-  saveRestartState,
-  loadRestartState,
-  clearRestartState,
-  type RestartState,
-} from "./tools/self-restart.js";
-import { getCurrentChatId } from "./tools/index.js";
+import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
 import { AGENTS } from "./agents.js";
 import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
@@ -416,44 +407,6 @@ async function handleEvent(
     archiveMessages(chatId, fullHistory, "70% context window");
     replaceHistory(chatId, compactedHistory);
     history.splice(0, history.length, ...compactedHistory);
-  }
-
-  // Check if self_restart was called — special flow
-  if (isRestartPending()) {
-    const restartMsg = getRestartMessage();
-
-    // Save resume context before exiting
-    // Find the resume_context from the tool call
-    let resumeContext = "";
-    for (const msg of newMessages) {
-      if (msg.role === "assistant" && Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === "tool_use" && block.name === "self_restart") {
-            const input = block.input as Record<string, unknown>;
-            resumeContext = (input.resume_context as string) || "";
-          }
-        }
-      }
-    }
-
-    saveRestartState({
-      reason: restartMsg,
-      resumeContext,
-      chatId,
-      timestamp: Date.now(),
-      attempts: 0,
-    });
-
-    // Send the restart reason directly — no extra Claude call
-    await sendMessageSafe(bot, chatId, `🔄 Restarting: ${restartMsg}`);
-
-    // Save messages to history, then exit
-    for (const msg of newMessages) {
-      saveMessage(chatId, msg);
-    }
-
-    executeRestart();
-    return; // won't reach here but makes control flow clear
   }
 
   // Extract reply text
