@@ -101,9 +101,18 @@ export function startBot(): void {
   const bot = new Telegraf(config.telegramBotToken);
   const linAgent = AGENTS.lin;
 
+  const BOT_START_TIME = Math.floor(Date.now() / 1000);
+
   bot.on("text", async (ctx) => {
     const chatId = String(ctx.chat.id);
     const userText = ctx.message.text;
+    const msgTime = ctx.message.date; // Unix timestamp
+
+    // Drop messages that arrived before the bot started (stale replay)
+    if (msgTime < BOT_START_TIME - 5) {
+      console.log(`[msg] dropped stale message (age=${BOT_START_TIME - msgTime}s): ${userText.slice(0, 50)}`);
+      return;
+    }
 
     console.log(`[msg] chat=${chatId}: ${userText.slice(0, 100)}`);
 
