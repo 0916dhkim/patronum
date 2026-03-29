@@ -5,7 +5,7 @@ import { initThread, appendToThread, loadThread, formatThreadForContext, compact
 import { runAgent, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
-import { setCurrentChatId } from "./tools/index.js";
+import { setCurrentChatId, setBot, setSendMediaChatId } from "./tools/index.js";
 import { AGENTS } from "./agents.js";
 import type { Message } from "./types.js";
 
@@ -101,6 +101,7 @@ export function startBot(): void {
   const bot = new Telegraf(config.telegramBotToken, {
     handlerTimeout: Infinity, // no timeout — personal bot, multi-agent flows can run as long as needed
   });
+  setBot(bot);
   const linAgent = AGENTS.lin;
 
   const BOT_START_TIME = Math.floor(Date.now() / 1000);
@@ -118,8 +119,9 @@ export function startBot(): void {
 
     console.log(`[msg] chat=${chatId}: ${userText.slice(0, 100)}`);
 
-    // Set chat ID so run_agent tool knows the current context
+    // Set chat ID so run_agent and send_media tools know the current context
     setCurrentChatId(chatId);
+    setSendMediaChatId(chatId);
 
     // --- Thread: append user message ---
     appendToThread(chatId, "user", userText);

@@ -4,10 +4,12 @@ import { readTool } from "./read.js";
 import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
 import { runAgentTool } from "./run-agent.js";
+import { sendMediaTool, setBot, setSendMediaChatId } from "./send-media.js";
 
 export { setCurrentChatId } from "./run-agent.js";
+export { setBot, setSendMediaChatId };
 
-const tools: ToolHandler[] = [execTool, readTool, writeTool, editTool, runAgentTool];
+const tools: ToolHandler[] = [execTool, readTool, writeTool, editTool, runAgentTool, sendMediaTool];
 
 const toolMap = new Map<string, ToolHandler>(
   tools.map((t) => [t.definition.name, t])
