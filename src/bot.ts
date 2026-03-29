@@ -7,6 +7,7 @@ import { runAgentWithSnapshot } from "./run-agent.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
+import { isRestartPending, executeRestart } from "./tools/self-restart.js";
 import { AGENTS } from "./agents.js";
 import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
@@ -397,5 +398,10 @@ async function handleEvent(
   const chunks = splitMessage(reply);
   for (const chunk of chunks) {
     await sendMessageSafe(bot, chatId, chunk);
+  }
+
+  // If self_restart was called during this turn, exit now that the reply is delivered
+  if (isRestartPending()) {
+    executeRestart();
   }
 }
