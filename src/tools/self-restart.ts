@@ -1,19 +1,15 @@
 /**
  * self_restart tool — rebuild and restart the bot process.
- * 
+ *
  * Flow:
  * 1. Run `npm run build` in the source directory
  * 2. If build fails, return error (no restart)
- * 3. If build succeeds, spawn a detached restart script and exit
- * 
- * Requires a process supervisor (systemd, wrapper script) or uses
- * a detached child process to bring the bot back up.
+ * 3. If build succeeds, exit the process — systemd (Restart=always) brings it back
  */
 
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import path from "node:path";
 import { config } from "../config.js";
-
 import type { ToolHandler } from "../types.js";
 
 export const selfRestartTool: ToolHandler = {
@@ -23,7 +19,7 @@ export const selfRestartTool: ToolHandler = {
       "Rebuild and restart the bot. Use after editing source code. " +
       "Runs `npm run build` first — if the build fails, the restart is aborted " +
       "and you get the build error to fix. If the build succeeds, the process " +
-      "exits and restarts automatically.",
+      "exits and the process supervisor restarts it automatically.",
     input_schema: {
       type: "object",
       properties: {
@@ -45,7 +41,7 @@ export const selfRestartTool: ToolHandler = {
     // Step 1: Build
     try {
       console.log("[self_restart] Running npm run build...");
-      const buildOutput = execSync("npm run build", {
+      execSync("npm run build", {
         cwd: sourceDir,
         encoding: "utf-8",
         timeout: 30_000,
@@ -58,25 +54,9 @@ export const selfRestartTool: ToolHandler = {
       return `Build failed — restart aborted.\n\n${stderr}`;
     }
 
-    // Step 2: Spawn detached restart process and exit
-    // The restart script waits for this process to die, then starts a new one
-    const workspaceDir = config.workspace;
-    const restartScript = `
-      sleep 2
-      cd "${workspaceDir}"
-      exec node source/dist/index.js >> /tmp/patronum.log 2>&1
-    `;
+    // Step 2: Exit — systemd Restart=always brings us back
+    console.log(`[self_restart] Build succeeded, exiting for restart (reason: ${reason})`);
 
-    const child = spawn("bash", ["-c", restartScript], {
-      detached: true,
-      stdio: "ignore",
-      cwd: sourceDir,
-    });
-    child.unref();
-
-    console.log(`[self_restart] Detached restart process spawned (PID ${child.pid}), exiting...`);
-
-    // Give a moment for the response to be sent back to Telegram
     setTimeout(() => {
       process.exit(0);
     }, 1000);

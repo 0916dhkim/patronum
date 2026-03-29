@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
 import { AGENTS } from "./agents.js";
-import { loadThread, appendToThread, formatThreadForContext, compactThread } from "./thread.js";
+import { loadThread, appendToThread, formatThreadForContext } from "./thread.js";
 import type { ThreadMessage } from "./thread.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import type {
@@ -130,16 +130,6 @@ export async function runAgentInThread(
   if (userPrompt) {
     // The task briefing from lin goes to thread as lin's message
     appendToThread(chatId, "lin", userPrompt);
-  }
-
-  // Auto-compact thread if it's grown too large
-  try {
-    const didCompact = await compactThread(chatId);
-    if (didCompact) {
-      console.log(`[run-agent] Thread compacted for chat=${chatId} before running ${agentName}`);
-    }
-  } catch (err) {
-    console.error(`[run-agent] Thread compaction failed (continuing anyway):`, err);
   }
 
   // Load thread and format as context

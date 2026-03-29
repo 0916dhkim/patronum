@@ -1,7 +1,7 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages } from "./session.js";
-import { initThread, appendToThread, loadThread, formatThreadForContext, compactThread } from "./thread.js";
+import { initThread, appendToThread, loadThread, formatThreadForContext } from "./thread.js";
 import { runAgent, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { runAgentWithSnapshot } from "./run-agent.js";
 import { compactIfNeeded } from "./compaction.js";
@@ -308,16 +308,6 @@ async function handleEvent(
       `Error: ${event.error}`,
     ].join("\n");
     extraContext = [notification];
-  }
-
-  // Auto-compact thread before running Lin
-  try {
-    const didCompact = await compactThread(chatId);
-    if (didCompact) {
-      console.log(`[bot] Thread compacted for chat=${chatId}`);
-    }
-  } catch (err) {
-    console.error(`[bot] Thread compaction failed (continuing):`, err);
   }
 
   // Load session history and thread
