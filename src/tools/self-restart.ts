@@ -40,6 +40,7 @@ export interface RestartState {
   resumeContext: string;
   chatId: string;
   timestamp: number;
+  attempts: number;
 }
 
 function getRestartStatePath(): string {
@@ -52,26 +53,41 @@ export function saveRestartState(state: RestartState): void {
   console.log(`[self_restart] Saved restart state: ${state.reason}`);
 }
 
-/** Load and clear restart state (called on boot) */
+/** Load restart state (called on boot). Consume-once: deletes on second attempt. */
 export function loadRestartState(): RestartState | null {
   const statePath = getRestartStatePath();
   try {
     const raw = fs.readFileSync(statePath, "utf-8");
     const state = JSON.parse(raw) as RestartState;
 
-    // Clear the state file so we don't re-trigger on next boot
-    fs.unlinkSync(statePath);
-    console.log(`[self_restart] Loaded restart state: ${state.reason}`);
+    state.attempts = (state.attempts ?? 0) + 1;
 
-    // Ignore stale state (older than 5 minutes)
-    if (Date.now() - state.timestamp > 5 * 60 * 1000) {
-      console.log("[self_restart] Restart state too old, ignoring");
+    if (state.attempts > 1) {
+      // Already tried resuming once — this is a crash loop. Bail out.
+      console.warn(`[self_restart] Resume already attempted (attempts=${state.attempts}), deleting stale state`);
+      fs.unlinkSync(statePath);
       return null;
     }
+
+    // Write back with incremented attempt count before we try resuming
+    // If we crash during resume, next boot sees attempts=2 and bails
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
+    console.log(`[self_restart] Loaded restart state: ${state.reason} (attempt ${state.attempts})`);
 
     return state;
   } catch {
     return null;
+  }
+}
+
+/** Clear restart state after successful resume */
+export function clearRestartState(): void {
+  const statePath = getRestartStatePath();
+  try {
+    fs.unlinkSync(statePath);
+    console.log("[self_restart] Restart state cleared (resume successful)");
+  } catch {
+    // Already gone, fine
   }
 }
 

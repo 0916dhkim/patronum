@@ -13,6 +13,7 @@ import {
   getRestartMessage,
   saveRestartState,
   loadRestartState,
+  clearRestartState,
   type RestartState,
 } from "./tools/self-restart.js";
 import { getCurrentChatId } from "./tools/index.js";
@@ -216,9 +217,12 @@ export function startBot(): void {
   if (restartState && restartState.chatId) {
     console.log(`[patronum] Resuming after restart: ${restartState.reason}`);
 
-    // Send "back online" notification
-    bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").catch((err) => {
+    // Send "back online" notification and clear state (resume succeeded)
+    bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").then(() => {
+      clearRestartState();
+    }).catch((err) => {
       console.error("[patronum] Failed to send restart notification:", err);
+      clearRestartState(); // clear anyway — don't want a Telegram error to cause a loop
     });
 
     // If there's resume context, inject it as a synthetic message to continue work
@@ -437,6 +441,7 @@ async function handleEvent(
       resumeContext,
       chatId,
       timestamp: Date.now(),
+      attempts: 0,
     });
 
     // Send the restart reason directly — no extra Claude call
