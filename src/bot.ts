@@ -98,7 +98,9 @@ export function startBot(): void {
   initSession();
   initThread();
 
-  const bot = new Telegraf(config.telegramBotToken);
+  const bot = new Telegraf(config.telegramBotToken, {
+    handlerTimeout: Infinity, // no timeout — personal bot, multi-agent flows can run as long as needed
+  });
   const linAgent = AGENTS.lin;
 
   const BOT_START_TIME = Math.floor(Date.now() / 1000);
@@ -190,7 +192,7 @@ export function startBot(): void {
     }
   });
 
-  bot.launch();
+  bot.launch({ allowedUpdates: ["message"] });
   console.log("[patronum] Bot started (multi-agent mode)");
 
   // Send startup notification
