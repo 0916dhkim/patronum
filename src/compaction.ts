@@ -2,28 +2,64 @@ import { config } from "./config.js";
 import type { Message, ContentBlock } from "./types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
+const MODELS_API_URL = "https://api.anthropic.com/v1/models";
 
-// Token thresholds
-const COMPACTION_THRESHOLD = 60_000; // trigger compaction above this many estimated tokens
-const KEEP_RECENT_TOKENS = 20_000;   // always keep this many tokens of recent messages
+// Compaction triggers at 70% of the model's context window
+const COMPACTION_RATIO = 0.70;
+
+// Keep last ~20 messages verbatim during compaction
+const KEEP_RECENT_COUNT = 20;
+
+// Cache: model id → context_window size
+const contextWindowCache = new Map<string, number>();
+
+// Fallback context windows for common models
+const FALLBACK_CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-sonnet-4-6": 200_000,
+  "claude-opus-4-6": 200_000,
+  "claude-haiku-3-5-20241022": 200_000,
+  "claude-sonnet-4-20250514": 200_000,
+};
 
 /**
- * Rough token estimator: ~4 chars per token
+ * Fetch the context window size for a model from the Anthropic models API.
+ * Caches results in memory.
  */
-export function estimateTokens(messages: Message[]): number {
-  let chars = 0;
-  for (const msg of messages) {
-    if (typeof msg.content === "string") {
-      chars += msg.content.length;
-    } else {
-      for (const block of msg.content) {
-        if (block.type === "text") chars += block.text.length;
-        else if (block.type === "tool_use") chars += JSON.stringify(block.input).length + block.name.length;
-        else if (block.type === "tool_result") chars += block.content.length;
+export async function getContextWindow(model: string): Promise<number> {
+  const cached = contextWindowCache.get(model);
+  if (cached !== undefined) return cached;
+
+  try {
+    const response = await fetch(`${MODELS_API_URL}/${model}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.claudeToken}`,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20,claude-code-20250219",
+        "user-agent": "claude-cli/2.1.85",
+        "content-type": "application/json",
+      },
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as { context_window?: number };
+      if (data.context_window) {
+        contextWindowCache.set(model, data.context_window);
+        console.log(`[compaction] Cached context window for ${model}: ${data.context_window}`);
+        return data.context_window;
       }
+    } else {
+      console.warn(`[compaction] Models API returned ${response.status} for ${model}, using fallback`);
     }
+  } catch (err) {
+    console.warn(`[compaction] Failed to fetch context window for ${model}:`, err);
   }
-  return Math.ceil(chars / 4);
+
+  // Fallback
+  const fallback = FALLBACK_CONTEXT_WINDOWS[model] ?? 200_000;
+  contextWindowCache.set(model, fallback);
+  console.log(`[compaction] Using fallback context window for ${model}: ${fallback}`);
+  return fallback;
 }
 
 /**
@@ -44,7 +80,7 @@ function messageToText(msg: Message): string {
 }
 
 /**
- * Call Claude to summarize a set of messages
+ * Call Claude (Haiku) to summarize a set of messages
  */
 async function summarizeMessages(messages: Message[]): Promise<string> {
   const transcript = messages.map(messageToText).join("\n\n");
@@ -61,7 +97,7 @@ async function summarizeMessages(messages: Message[]): Promise<string> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: config.claudeModel,
+      model: "claude-haiku-3-5-20241022",
       max_tokens: 2048,
       system: "You are a precise summarizer. Summarize the conversation transcript below into a compact but complete summary. Preserve all key facts, decisions, code changes, and context that would be needed to continue the conversation. Be concise but thorough. Output only the summary, no preamble.",
       messages: [
@@ -83,34 +119,33 @@ async function summarizeMessages(messages: Message[]): Promise<string> {
 }
 
 /**
- * If the conversation is too long, compact older messages into a summary.
+ * Token-based compaction: triggers when input_tokens / context_window >= 70%.
+ * Keeps the last KEEP_RECENT_COUNT messages verbatim, summarizes the rest with Haiku.
  * Returns the (possibly compacted) message array.
  */
-export async function compactIfNeeded(messages: Message[]): Promise<{ messages: Message[]; compacted: boolean }> {
-  const totalTokens = estimateTokens(messages);
+export async function compactIfNeeded(
+  messages: Message[],
+  inputTokens: number,
+  model: string
+): Promise<{ messages: Message[]; compacted: boolean }> {
+  const contextWindow = await getContextWindow(model);
+  const ratio = inputTokens / contextWindow;
 
-  if (totalTokens <= COMPACTION_THRESHOLD) {
+  console.log(`[compaction] Token usage: ${inputTokens}/${contextWindow} (${(ratio * 100).toFixed(1)}%)`);
+
+  if (ratio < COMPACTION_RATIO) {
     return { messages, compacted: false };
   }
 
-  console.log(`[compaction] Context ~${totalTokens} tokens — compacting...`);
+  console.log(`[compaction] Threshold reached (${(ratio * 100).toFixed(1)}% >= ${COMPACTION_RATIO * 100}%) — compacting...`);
 
-  // Find the split point: keep recent messages up to KEEP_RECENT_TOKENS
-  let recentTokens = 0;
-  let splitIndex = messages.length;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    recentTokens += estimateTokens([messages[i]]);
-    if (recentTokens >= KEEP_RECENT_TOKENS) {
-      splitIndex = i + 1;
-      break;
-    }
-    splitIndex = i;
-  }
+  // Split: summarize older messages, keep recent ones verbatim
+  const splitIndex = Math.max(0, messages.length - KEEP_RECENT_COUNT);
 
   // Ensure we have at least something to summarize
   if (splitIndex === 0) {
-    splitIndex = Math.floor(messages.length / 2);
+    console.log(`[compaction] Not enough messages to split — skipping`);
+    return { messages, compacted: false };
   }
 
   const toSummarize = messages.slice(0, splitIndex);
@@ -126,7 +161,7 @@ export async function compactIfNeeded(messages: Message[]): Promise<{ messages: 
     content: `[Conversation summary — earlier context compacted]\n\n${summary}`,
   };
 
-  // We need an assistant ack to keep message alternation valid
+  // Assistant ack to keep message alternation valid
   const summaryAck: Message = {
     role: "assistant",
     content: "Understood. I have the context from the earlier conversation.",

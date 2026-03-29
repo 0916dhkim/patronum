@@ -76,13 +76,22 @@ async function callClaude(messages: Message[], options?: AgentOptions): Promise<
   return (await response.json()) as ClaudeResponse;
 }
 
-export async function runAgent(messages: Message[], options?: AgentOptions): Promise<Message[]> {
+export interface AgentResult {
+  messages: Message[];
+  inputTokens: number;
+}
+
+export async function runAgent(messages: Message[], options?: AgentOptions): Promise<AgentResult> {
   const conversation = [...messages];
   const newMessages: Message[] = [];
+  let lastInputTokens = 0;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const response = await callClaude(conversation, options);
+
+    // Track the latest input_tokens from the API response
+    lastInputTokens = response.usage?.input_tokens ?? lastInputTokens;
 
     const assistantMessage: Message = {
       role: "assistant",
@@ -124,7 +133,7 @@ export async function runAgent(messages: Message[], options?: AgentOptions): Pro
     newMessages.push(toolResultMessage);
   }
 
-  return newMessages;
+  return { messages: newMessages, inputTokens: lastInputTokens };
 }
 
 export function extractTextFromResponse(messages: Message[]): string {

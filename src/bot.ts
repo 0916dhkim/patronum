@@ -2,7 +2,7 @@ import { Telegraf } from "telegraf";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage, replaceHistory } from "./session.js";
 import { initThread, appendToThread, loadThread, formatThreadForContext, compactThread } from "./thread.js";
-import { runAgent, extractTextFromResponse } from "./agent.js";
+import { runAgent, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId } from "./tools/index.js";
@@ -142,27 +142,34 @@ export function startBot(): void {
       // Show typing indicator while processing
       await ctx.sendChatAction("typing");
 
-      // Compact session history if needed
-      const { messages: compactedHistory, compacted } = await compactIfNeeded(history);
-      if (compacted) {
-        replaceHistory(chatId, compactedHistory);
-        history.splice(0, history.length, ...compactedHistory);
-      }
-
       // Load thread context for Lin
       const thread = loadThread(chatId);
       const threadContext = formatThreadForContext(thread);
 
       // Run Lin with thread context injected into system prompt
-      const newMessages = await runAgent(history, {
+      const agentResult = await runAgent(history, {
         model: linAgent.model,
         workspace: linAgent.workspaceDir,
         extraContext: [threadContext],
       });
 
+      const { messages: newMessages, inputTokens } = agentResult;
+
       // Save all new messages to session history
       for (const msg of newMessages) {
         saveMessage(chatId, msg);
+      }
+
+      // Token-based compaction: check if we've hit 70% of context window
+      const model = linAgent.model;
+      const { messages: compactedHistory, compacted } = await compactIfNeeded(
+        [...history, ...newMessages],
+        inputTokens,
+        model
+      );
+      if (compacted) {
+        replaceHistory(chatId, compactedHistory);
+        history.splice(0, history.length, ...compactedHistory);
       }
 
       // Extract reply text
