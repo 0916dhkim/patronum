@@ -13,6 +13,7 @@
 import { execSync, spawn } from "node:child_process";
 import path from "node:path";
 import { config } from "../config.js";
+
 import type { ToolHandler } from "../types.js";
 
 export const selfRestartTool: ToolHandler = {
@@ -37,7 +38,7 @@ export const selfRestartTool: ToolHandler = {
 
   async execute(input: Record<string, unknown>): Promise<string> {
     const reason = (input.reason as string) || "no reason given";
-    const sourceDir = config.workspace;
+    const sourceDir = path.join(config.workspace, "source");
 
     console.log(`[self_restart] Restart requested: ${reason}`);
 
@@ -59,10 +60,11 @@ export const selfRestartTool: ToolHandler = {
 
     // Step 2: Spawn detached restart process and exit
     // The restart script waits for this process to die, then starts a new one
+    const workspaceDir = config.workspace;
     const restartScript = `
       sleep 2
-      cd "${sourceDir}"
-      exec node dist/index.js >> /tmp/patronum.log 2>&1
+      cd "${workspaceDir}"
+      exec node source/dist/index.js >> /tmp/patronum.log 2>&1
     `;
 
     const child = spawn("bash", ["-c", restartScript], {

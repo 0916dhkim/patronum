@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import { loadContextFile } from "./context.js";
+import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import type {
   Message,
@@ -36,6 +37,9 @@ function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: 
   if (agents) system.push({ type: "text", text: agents });
   const memory = loadContextFile(workspace, "MEMORY.md");
   if (memory) system.push({ type: "text", text: `[MEMORY.md — curated persistent facts]\n\n${memory}` });
+
+  // Always inject project self-knowledge
+  system.push({ type: "text", text: getProjectContext() });
 
   // Append any extra context (thread, etc.)
   if (options?.extraContext) {
