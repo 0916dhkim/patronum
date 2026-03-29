@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { AGENTS } from "./agents.js";
 import { loadThread, appendToThread, formatThreadForContext, compactThread } from "./thread.js";
+import type { ThreadMessage } from "./thread.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import type {
   Message,
@@ -55,7 +56,8 @@ function buildAgentSystemPrompt(
 async function callClaudeForAgent(
   agentName: string,
   messages: Message[],
-  systemPrompt: Array<{ type: "text"; text: string }>
+  systemPrompt: Array<{ type: "text"; text: string }>,
+  signal?: AbortSignal
 ): Promise<ClaudeResponse> {
   const agent = AGENTS[agentName];
   if (!agent) throw new Error(`Unknown agent: ${agentName}`);
@@ -82,6 +84,7 @@ async function callClaudeForAgent(
       tools,
       messages,
     }),
+    signal,
   });
 
   if (!response.ok) {
@@ -103,7 +106,7 @@ function extractFinalText(content: ContentBlock[]): string {
 }
 
 /**
- * Run a specialist agent within the shared thread context.
+ * Run a specialist agent within the shared thread context (SYNCHRONOUS version).
  *
  * 1. Loads the full thread for context
  * 2. Optionally appends a new user prompt to the thread
@@ -114,10 +117,14 @@ function extractFinalText(content: ContentBlock[]): string {
 export async function runAgentInThread(
   agentName: string,
   chatId: string,
-  userPrompt?: string
+  userPrompt?: string,
+  signal?: AbortSignal
 ): Promise<string> {
   const agent = AGENTS[agentName];
   if (!agent) throw new Error(`Unknown agent: ${agentName}`);
+
+  // Check abort before starting
+  if (signal?.aborted) throw new Error("Task cancelled");
 
   // Optionally append the task/prompt to the thread
   if (userPrompt) {
@@ -153,7 +160,10 @@ export async function runAgentInThread(
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const response = await callClaudeForAgent(agentName, messages, systemPrompt);
+    // Check abort before each API call
+    if (signal?.aborted) throw new Error("Task cancelled");
+
+    const response = await callClaudeForAgent(agentName, messages, systemPrompt, signal);
 
     const assistantMessage: Message = {
       role: "assistant",
@@ -166,6 +176,9 @@ export async function runAgentInThread(
       break;
     }
 
+    // Check abort before tool execution
+    if (signal?.aborted) throw new Error("Task cancelled");
+
     // Execute tool calls
     const toolUseBlocks = response.content.filter(
       (b): b is ToolUseBlock => b.type === "tool_use"
@@ -173,6 +186,16 @@ export async function runAgentInThread(
 
     const toolResults: ToolResultBlock[] = await Promise.all(
       toolUseBlocks.map(async (block) => {
+        // Check abort before each tool
+        if (signal?.aborted) {
+          return {
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: "Task cancelled",
+            is_error: true,
+          };
+        }
+
         console.log(`[agent:${agentName}:tool] ${block.name}(${JSON.stringify(block.input)})`);
         const { result, isError } = await executeTool(
           block.name,
@@ -187,6 +210,9 @@ export async function runAgentInThread(
       })
     );
 
+    // Check abort after tool execution
+    if (signal?.aborted) throw new Error("Task cancelled");
+
     const toolResultMessage: Message = {
       role: "user",
       content: toolResults,
@@ -200,5 +226,93 @@ export async function runAgentInThread(
     appendToThread(chatId, agentName as "alex" | "iris" | "quill", finalText);
   }
 
+  return finalText || "(no response from agent)";
+}
+
+/**
+ * Run a specialist agent with a pre-built thread snapshot (ASYNC version).
+ * Does NOT append to the live thread — the caller (task-manager flow) handles that.
+ */
+export async function runAgentWithSnapshot(
+  agentName: string,
+  chatId: string,
+  userPrompt: string,
+  threadSnapshot: ThreadMessage[],
+  signal?: AbortSignal
+): Promise<string> {
+  const agent = AGENTS[agentName];
+  if (!agent) throw new Error(`Unknown agent: ${agentName}`);
+
+  if (signal?.aborted) throw new Error("Task cancelled");
+
+  // Format snapshot as context (not the live thread)
+  const threadContext = formatThreadForContext(threadSnapshot);
+
+  // Build system prompt with agent identity + snapshot context
+  const systemPrompt = buildAgentSystemPrompt(agentName, threadContext);
+
+  const messages: Message[] = [
+    { role: "user", content: userPrompt },
+  ];
+
+  let lastAssistantContent: ContentBlock[] = [];
+
+  while (true) {
+    if (signal?.aborted) throw new Error("Task cancelled");
+
+    const response = await callClaudeForAgent(agentName, messages, systemPrompt, signal);
+
+    const assistantMessage: Message = {
+      role: "assistant",
+      content: response.content,
+    };
+    messages.push(assistantMessage);
+    lastAssistantContent = response.content;
+
+    if (response.stop_reason !== "tool_use") {
+      break;
+    }
+
+    if (signal?.aborted) throw new Error("Task cancelled");
+
+    const toolUseBlocks = response.content.filter(
+      (b): b is ToolUseBlock => b.type === "tool_use"
+    );
+
+    const toolResults: ToolResultBlock[] = await Promise.all(
+      toolUseBlocks.map(async (block) => {
+        if (signal?.aborted) {
+          return {
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: "Task cancelled",
+            is_error: true,
+          };
+        }
+
+        console.log(`[agent:${agentName}:tool] ${block.name}(${JSON.stringify(block.input)})`);
+        const { result, isError } = await executeTool(
+          block.name,
+          block.input as Record<string, unknown>
+        );
+        return {
+          type: "tool_result" as const,
+          tool_use_id: block.id,
+          content: result.slice(0, 50_000),
+          is_error: isError,
+        };
+      })
+    );
+
+    if (signal?.aborted) throw new Error("Task cancelled");
+
+    const toolResultMessage: Message = {
+      role: "user",
+      content: toolResults,
+    };
+    messages.push(toolResultMessage);
+  }
+
+  const finalText = extractFinalText(lastAssistantContent);
   return finalText || "(no response from agent)";
 }

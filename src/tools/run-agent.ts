@@ -8,6 +8,10 @@ export function setCurrentChatId(chatId: string): void {
   currentChatId = chatId;
 }
 
+export function getCurrentChatId(): string {
+  return currentChatId;
+}
+
 export const runAgentTool: ToolHandler = {
   definition: {
     name: "run_agent",

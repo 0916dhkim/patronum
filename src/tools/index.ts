@@ -5,11 +5,25 @@ import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
 import { runAgentTool } from "./run-agent.js";
 import { sendMediaTool, setBot, setSendMediaChatId } from "./send-media.js";
+import { spawnAgentTool, setSpawnCallback } from "./spawn-agent.js";
+import { cancelAgentTool } from "./cancel-agent.js";
+import { listTasksTool } from "./list-tasks.js";
 
-export { setCurrentChatId } from "./run-agent.js";
+export { setCurrentChatId, getCurrentChatId } from "./run-agent.js";
 export { setBot, setSendMediaChatId };
+export { setSpawnCallback };
 
-const tools: ToolHandler[] = [execTool, readTool, writeTool, editTool, runAgentTool, sendMediaTool];
+const tools: ToolHandler[] = [
+  execTool,
+  readTool,
+  writeTool,
+  editTool,
+  runAgentTool,
+  sendMediaTool,
+  spawnAgentTool,
+  cancelAgentTool,
+  listTasksTool,
+];
 
 const toolMap = new Map<string, ToolHandler>(
   tools.map((t) => [t.definition.name, t])

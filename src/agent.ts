@@ -45,7 +45,7 @@ function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: 
   return system;
 }
 
-async function callClaude(messages: Message[], options?: AgentOptions): Promise<ClaudeResponse> {
+async function callClaude(messages: Message[], options?: AgentOptions, signal?: AbortSignal): Promise<ClaudeResponse> {
   const model = options?.model || config.claudeModel;
 
   const response = await fetch(API_URL, {
@@ -66,6 +66,7 @@ async function callClaude(messages: Message[], options?: AgentOptions): Promise<
       tools: getToolDefinitions(),
       messages,
     }),
+    signal,
   });
 
   if (!response.ok) {
@@ -81,14 +82,16 @@ export interface AgentResult {
   inputTokens: number;
 }
 
-export async function runAgent(messages: Message[], options?: AgentOptions): Promise<AgentResult> {
+export async function runAgent(messages: Message[], options?: AgentOptions, signal?: AbortSignal): Promise<AgentResult> {
   const conversation = [...messages];
   const newMessages: Message[] = [];
   let lastInputTokens = 0;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const response = await callClaude(conversation, options);
+    if (signal?.aborted) throw new Error("Task cancelled");
+
+    const response = await callClaude(conversation, options, signal);
 
     // Track the latest input_tokens from the API response
     lastInputTokens = response.usage?.input_tokens ?? lastInputTokens;
@@ -109,8 +112,19 @@ export async function runAgent(messages: Message[], options?: AgentOptions): Pro
       (b): b is ToolUseBlock => b.type === "tool_use"
     );
 
+    if (signal?.aborted) throw new Error("Task cancelled");
+
     const toolResults: ToolResultBlock[] = await Promise.all(
       toolUseBlocks.map(async (block) => {
+        if (signal?.aborted) {
+          return {
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: "Task cancelled",
+            is_error: true,
+          };
+        }
+
         console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
         const { result, isError } = await executeTool(
           block.name,
@@ -124,6 +138,8 @@ export async function runAgent(messages: Message[], options?: AgentOptions): Pro
         };
       })
     );
+
+    if (signal?.aborted) throw new Error("Task cancelled");
 
     const toolResultMessage: Message = {
       role: "user",
