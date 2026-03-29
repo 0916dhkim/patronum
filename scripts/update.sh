@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEPLOY_DIR="/home/lin/patronum"
+# Update patronum source and restart.
+# Usage: sudo bash scripts/update.sh [workspace_dir]
+
+WORKSPACE_DIR="${1:-/opt/patronum}"
 
 echo "==> Pulling latest changes..."
-sudo -u lin bash -c "cd ${DEPLOY_DIR} && git pull"
+cd "${WORKSPACE_DIR}/source" && git pull
 
 echo "==> Installing dependencies and rebuilding..."
-sudo -u lin bash -c "cd ${DEPLOY_DIR} && npm install && npm run build"
+cd "${WORKSPACE_DIR}/source" && npm install && npm run build
 
 echo "==> Restarting patronum service..."
 systemctl restart patronum
 
 echo "==> Done!"
-echo "      Check status with: systemctl status patronum"
-echo "      View logs with:    journalctl -u patronum -f"
+echo "    Check status: systemctl status patronum"
+echo "    View logs:    journalctl -u patronum -f"
