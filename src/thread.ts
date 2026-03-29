@@ -11,7 +11,6 @@ export interface ThreadMessage {
   chatId: string;
 }
 
-const DB_PATH = path.join(config.workspace, "patronum.db");
 const MAX_THREAD_MESSAGES = 200;
 
 // Compaction thresholds — configurable via env
@@ -25,7 +24,8 @@ const COMPACTION_MODEL = "claude-3-5-haiku-20241022"; // cheap model for summari
 let db: Database.Database;
 
 export function initThread(): void {
-  db = new Database(DB_PATH);
+  const dbPath = path.join(config.workspace, "patronum.db");
+  db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS thread_messages (

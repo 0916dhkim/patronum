@@ -9,6 +9,7 @@ import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
 import { AGENTS } from "./agents.js";
 import { taskManager } from "./task-manager.js";
+import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
 import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
@@ -92,6 +93,15 @@ async function sendMessageSafe(
 export function startBot(): void {
   initSession();
   initThread();
+
+  // Initialize memory system (vector search)
+  if (config.voyageApiKey) {
+    initEmbeddings(config.voyageApiKey);
+    initMemoryStore();
+    console.log(`[patronum] Memory system initialized (${getChunkCount()} chunks indexed)`);
+  } else {
+    console.warn("[patronum] VOYAGE_API_KEY not set — memory system disabled");
+  }
 
   const bot = new Telegraf(config.telegramBotToken, {
     handlerTimeout: Infinity,
@@ -334,6 +344,19 @@ async function handleEvent(
   const thread = loadThread(chatId);
   const threadContext = formatThreadForContext(thread);
 
+  // Auto-recall: find relevant past context for user messages
+  if (config.voyageApiKey && event.type === "user_message") {
+    try {
+      const recallContext = await autoRecall(event.text);
+      if (recallContext) {
+        extraContext.push(recallContext);
+        console.log(`[bot] Auto-recall injected context for chat=${chatId}`);
+      }
+    } catch (err) {
+      console.error(`[bot] Auto-recall failed (continuing):`, err);
+    }
+  }
+
   // Run Lin
   const agentResult = await runAgent(history, {
     model: linAgent.model,
@@ -371,6 +394,14 @@ async function handleEvent(
 
   // Append Lin's response to the shared thread
   appendToThread(chatId, "lin", reply);
+
+  // Post-turn: index this exchange into vector memory
+  if (config.voyageApiKey && event.type === "user_message") {
+    // Fire-and-forget — don't block the reply
+    indexExchange(chatId, event.text, newMessages).catch((err) => {
+      console.error(`[bot] Failed to index exchange:`, err);
+    });
+  }
 
   // Send to Telegram
   const chunks = splitMessage(reply);

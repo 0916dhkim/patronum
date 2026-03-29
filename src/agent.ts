@@ -34,6 +34,8 @@ function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: 
   if (soul) system.push({ type: "text", text: soul });
   const agents = loadContextFile(workspace, "AGENTS.md");
   if (agents) system.push({ type: "text", text: agents });
+  const memory = loadContextFile(workspace, "MEMORY.md");
+  if (memory) system.push({ type: "text", text: `[MEMORY.md — curated persistent facts]\n\n${memory}` });
 
   // Append any extra context (thread, etc.)
   if (options?.extraContext) {

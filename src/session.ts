@@ -3,11 +3,11 @@ import path from "path";
 import type { Message } from "./types.js";
 import { config } from "./config.js";
 
-const DB_PATH = path.join(config.workspace, "patronum.db");
 let db: Database.Database;
 
 export function initSession(): void {
-  db = new Database(DB_PATH);
+  const dbPath = path.join(config.workspace, "patronum.db");
+  db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (

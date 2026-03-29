@@ -7,6 +7,8 @@ import { sendMediaTool, setBot, setSendMediaChatId } from "./send-media.js";
 import { spawnAgentTool, setSpawnCallback } from "./spawn-agent.js";
 import { cancelAgentTool } from "./cancel-agent.js";
 import { listTasksTool } from "./list-tasks.js";
+import { memorySearchTool, memoryWriteTool } from "../memory/index.js";
+import { selfRestartTool } from "./self-restart.js";
 
 export { setCurrentChatId, getCurrentChatId } from "./chat-context.js";
 export { setBot, setSendMediaChatId };
@@ -21,6 +23,9 @@ const tools: ToolHandler[] = [
   spawnAgentTool,
   cancelAgentTool,
   listTasksTool,
+  memorySearchTool,
+  memoryWriteTool,
+  selfRestartTool,
 ];
 
 const toolMap = new Map<string, ToolHandler>(
