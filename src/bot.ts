@@ -193,7 +193,25 @@ export function startBot(): void {
   bot.launch();
   console.log("[patronum] Bot started (multi-agent mode)");
 
+  // Send startup notification
+  if (config.ownerChatId) {
+    bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online").catch((err) => {
+      console.error("[patronum] Failed to send startup notification:", err);
+    });
+  }
+
   // Graceful shutdown
-  process.once("SIGINT", () => bot.stop("SIGINT"));
-  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  const shutdown = async (signal: string) => {
+    console.log(`[patronum] Received ${signal}, shutting down...`);
+    if (config.ownerChatId) {
+      try {
+        await bot.telegram.sendMessage(config.ownerChatId, "🔴 Patronum offline");
+      } catch (err) {
+        console.error("[patronum] Failed to send shutdown notification:", err);
+      }
+    }
+    bot.stop(signal);
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }

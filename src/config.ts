@@ -6,6 +6,7 @@ export interface Config {
   claudeToken: string;
   claudeModel: string;
   workspace: string;
+  ownerChatId: string;
 }
 
 // Mutable config — populated by initConfig() before use
@@ -14,6 +15,7 @@ export const config: Config = {
   claudeToken: "",
   claudeModel: "",
   workspace: "",
+  ownerChatId: "",
 };
 
 export async function initConfig(): Promise<void> {
@@ -29,6 +31,7 @@ export async function initConfig(): Promise<void> {
 
   config.claudeModel = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
   config.workspace = process.env.WORKSPACE || process.cwd();
+  config.ownerChatId = process.env.OWNER_CHAT_ID || "";
 }
 
 function requireEnv(key: string): string {
