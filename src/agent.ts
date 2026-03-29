@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { loadContextFile } from "./context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import type {
   Message,
@@ -13,7 +14,17 @@ const MAX_TOKENS = 8192;
 
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
-const PERSONAL_ASSISTANT_PROMPT = `You are a helpful personal AI assistant. You have access to tools for running shell commands, reading/writing files, and editing files. Use them when needed to help the user. Be concise and direct.`;
+
+function buildSystemPrompt(): Array<{ type: "text"; text: string }> {
+  const system: Array<{ type: "text"; text: string }> = [
+    { type: "text", text: CLAUDE_CODE_IDENTITY },
+  ];
+  const soul = loadContextFile(config.workspace, "SOUL.md");
+  if (soul) system.push({ type: "text", text: soul });
+  const agents = loadContextFile(config.workspace, "AGENTS.md");
+  if (agents) system.push({ type: "text", text: agents });
+  return system;
+}
 
 async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
   const response = await fetch(API_URL, {
@@ -30,10 +41,7 @@ async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
     body: JSON.stringify({
       model: config.claudeModel,
       max_tokens: MAX_TOKENS,
-      system: [
-        { type: "text", text: CLAUDE_CODE_IDENTITY },
-        { type: "text", text: PERSONAL_ASSISTANT_PROMPT },
-      ],
+      system: buildSystemPrompt(),
       tools: getToolDefinitions(),
       messages,
     }),
