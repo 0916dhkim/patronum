@@ -82,8 +82,81 @@ export interface AgentResult {
   inputTokens: number;
 }
 
+/**
+ * Sanitize message history to ensure every tool_result has a matching tool_use
+ * in the immediately preceding assistant message. Claude's API requires this
+ * strict pairing — orphaned tool_results cause 400 errors.
+ *
+ * This can happen when:
+ * - loadHistory's LIMIT cuts mid tool-call pair
+ * - compaction splits between a tool_use and its tool_result
+ * - async event triggers a new Lin turn with stale history
+ */
+function sanitizeMessages(messages: Message[]): Message[] {
+  const result: Message[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+
+    // Check user messages that contain tool_result blocks
+    if (msg.role === "user" && Array.isArray(msg.content)) {
+      const toolResults = msg.content.filter(
+        (b): b is ToolResultBlock => b.type === "tool_result"
+      );
+
+      if (toolResults.length > 0) {
+        // Find the preceding assistant message in our result array
+        const prevAssistant = result.length > 0 ? result[result.length - 1] : null;
+
+        if (!prevAssistant || prevAssistant.role !== "assistant" || !Array.isArray(prevAssistant.content)) {
+          // No preceding assistant message — skip this entire tool_result message
+          console.warn(`[sanitize] Dropping orphaned tool_result message at index ${i} — no preceding assistant message`);
+          continue;
+        }
+
+        // Get tool_use IDs from the preceding assistant message
+        const toolUseIds = new Set(
+          prevAssistant.content
+            .filter((b): b is ToolUseBlock => b.type === "tool_use")
+            .map((b) => b.id)
+        );
+
+        // Filter to only tool_results that have matching tool_use blocks
+        const validResults = msg.content.filter((b) => {
+          if (b.type !== "tool_result") return true; // keep non-tool_result blocks
+          const valid = toolUseIds.has((b as ToolResultBlock).tool_use_id);
+          if (!valid) {
+            console.warn(`[sanitize] Dropping orphaned tool_result for tool_use_id=${(b as ToolResultBlock).tool_use_id}`);
+          }
+          return valid;
+        });
+
+        if (validResults.length === 0) {
+          // All tool_results were orphaned — drop the message entirely
+          console.warn(`[sanitize] Dropping entire tool_result message at index ${i} — all results orphaned`);
+          continue;
+        }
+
+        result.push({ role: msg.role, content: validResults });
+        continue;
+      }
+    }
+
+    result.push(msg);
+  }
+
+  // Also ensure the history doesn't start with an assistant message
+  // (Claude requires the first message to be from the user)
+  while (result.length > 0 && result[0].role === "assistant") {
+    console.warn(`[sanitize] Dropping leading assistant message`);
+    result.shift();
+  }
+
+  return result;
+}
+
 export async function runAgent(messages: Message[], options?: AgentOptions, signal?: AbortSignal): Promise<AgentResult> {
-  const conversation = [...messages];
+  const conversation = sanitizeMessages([...messages]);
   const newMessages: Message[] = [];
   let lastInputTokens = 0;
 

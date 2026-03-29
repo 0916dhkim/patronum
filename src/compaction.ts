@@ -140,7 +140,22 @@ export async function compactIfNeeded(
   console.log(`[compaction] Threshold reached (${(ratio * 100).toFixed(1)}% >= ${COMPACTION_RATIO * 100}%) — compacting...`);
 
   // Split: summarize older messages, keep recent ones verbatim
-  const splitIndex = Math.max(0, messages.length - KEEP_RECENT_COUNT);
+  let splitIndex = Math.max(0, messages.length - KEEP_RECENT_COUNT);
+
+  // Adjust split point to avoid breaking tool_use/tool_result pairs.
+  // If the message right after the split is a user message with tool_results,
+  // move the split back to include the preceding assistant message too.
+  if (splitIndex > 0 && splitIndex < messages.length) {
+    const msgAfterSplit = messages[splitIndex];
+    if (
+      msgAfterSplit.role === "user" &&
+      Array.isArray(msgAfterSplit.content) &&
+      msgAfterSplit.content.some((b) => b.type === "tool_result")
+    ) {
+      // Include the assistant message with the matching tool_use blocks
+      splitIndex = Math.max(0, splitIndex - 1);
+    }
+  }
 
   // Ensure we have at least something to summarize
   if (splitIndex === 0) {
