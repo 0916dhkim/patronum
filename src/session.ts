@@ -35,10 +35,27 @@ export function loadHistory(chatId: string): Message[] {
     )
     .all(chatId, MAX_HISTORY) as { role: string; content_json: string }[];
 
-  return rows.reverse().map((row) => ({
+  const messages = rows.reverse().map((row) => ({
     role: row.role as Message["role"],
     content: JSON.parse(row.content_json),
   }));
+
+  // Find the first clean boundary: a user message with plain text content (not tool_result)
+  // This ensures we don't start mid tool-call pair when the window cuts off the matching tool_use
+  let startIndex = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const isCleanUserMessage =
+      msg.role === "user" &&
+      (typeof msg.content === "string" ||
+        (Array.isArray(msg.content) && !msg.content.some((b) => b.type === "tool_result")));
+    if (isCleanUserMessage) {
+      startIndex = i;
+      break;
+    }
+  }
+
+  return messages.slice(startIndex);
 }
 
 export function saveMessage(chatId: string, message: Message): void {

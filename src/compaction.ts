@@ -164,7 +164,18 @@ export async function compactIfNeeded(
   }
 
   const toSummarize = messages.slice(0, splitIndex);
-  const toKeep = messages.slice(splitIndex);
+  let toKeep = messages.slice(splitIndex);
+
+  // Safety: ensure toKeep doesn't start with a tool_result message (would be orphaned)
+  while (
+    toKeep.length > 0 &&
+    toKeep[0].role === "user" &&
+    Array.isArray(toKeep[0].content) &&
+    toKeep[0].content.some((b) => b.type === "tool_result")
+  ) {
+    console.warn(`[compaction] Dropping leading tool_result message from toKeep to avoid orphan`);
+    toKeep = toKeep.slice(1);
+  }
 
   const summary = await summarizeMessages(toSummarize);
 
