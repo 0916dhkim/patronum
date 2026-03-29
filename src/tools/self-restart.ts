@@ -1,11 +1,9 @@
 /**
- * self_restart tool — request a rebuild and restart.
- *
- * Writes a .restart-request.json file. A separate watcher process
- * picks it up, builds, and restarts the service. The bot stays running
- * until the watcher kills it — no process.exit, no lost messages.
+ * self_restart tool — spawn restart.sh as a detached background process.
+ * All restart state lives in the script's memory. If it crashes, nothing is stale.
  */
 
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
@@ -15,7 +13,6 @@ export interface RestartState {
   reason: string;
   resumeContext: string;
   chatId: string;
-  timestamp: number;
   attempts: number;
 }
 
@@ -33,14 +30,14 @@ export function loadRestartState(): RestartState | null {
     state.attempts = (state.attempts ?? 0) + 1;
 
     if (state.attempts > 1) {
-      console.warn(`[self_restart] Resume already attempted (attempts=${state.attempts}), deleting stale state`);
+      console.warn(`[self_restart] Resume already attempted, deleting stale state`);
       fs.unlinkSync(statePath);
       return null;
     }
 
-    // Write back with incremented count — if we crash, next boot sees attempts=2
+    // Write back incremented — if resume crashes, next boot sees attempts=2
     fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
-    console.log(`[self_restart] Loaded restart state: ${state.reason} (attempt ${state.attempts})`);
+    console.log(`[self_restart] Loaded restart state: ${state.reason}`);
     return state;
   } catch {
     return null;
@@ -51,26 +48,23 @@ export function loadRestartState(): RestartState | null {
 export function clearRestartState(): void {
   try {
     fs.unlinkSync(getRestartStatePath());
-    console.log("[self_restart] Restart state cleared (resume successful)");
-  } catch {
-    // Already gone
-  }
+    console.log("[self_restart] Restart state cleared");
+  } catch {}
 }
 
 export const selfRestartTool: ToolHandler = {
   definition: {
     name: "self_restart",
     description:
-      "Request a rebuild and restart. A separate watcher process will build " +
-      "the project and restart the service. The bot stays running until the " +
-      "new build is ready. After restart, you'll receive the resume context " +
-      "and can continue where you left off.",
+      "Rebuild and restart the bot. Spawns a background script that builds, " +
+      "then restarts the service. The bot stays running during the build. " +
+      "After restart, you receive your resume_context to continue.",
     input_schema: {
       type: "object",
       properties: {
         reason: {
           type: "string",
-          description: "Brief reason for restart — sent to the user before shutdown",
+          description: "Brief reason for restart — shown to the user",
         },
         resume_context: {
           type: "string",
@@ -87,28 +81,25 @@ export const selfRestartTool: ToolHandler = {
     const reason = (input.reason as string) || "no reason given";
     const resumeContext = (input.resume_context as string) || "";
 
-    const requestPath = path.join(config.workspace, ".restart-request.json");
-
-    // Check if a restart is already pending
-    if (fs.existsSync(requestPath)) {
-      return "A restart is already pending. Wait for it to complete.";
-    }
-
-    // Get current chat ID from the call context
     const { getCurrentChatId } = await import("./chat-context.js");
     const chatId = getCurrentChatId() || config.ownerChatId || "";
 
-    // Write the request file — watcher picks it up
-    const request = {
-      reason,
-      resumeContext,
-      chatId,
-      timestamp: Date.now(),
-    };
+    const sourceDir = path.join(config.workspace, "source");
+    const scriptPath = path.join(sourceDir, "scripts", "restart.sh");
 
-    fs.writeFileSync(requestPath, JSON.stringify(request, null, 2), "utf-8");
-    console.log(`[self_restart] Restart requested: ${reason}`);
+    if (!fs.existsSync(scriptPath)) {
+      return `Restart script not found at ${scriptPath}`;
+    }
 
-    return `Restart requested. The watcher will build and restart the service. Reason: ${reason}`;
+    // Spawn detached — script owns its own lifecycle
+    const child = spawn("bash", [scriptPath, sourceDir, config.workspace, reason, resumeContext, chatId], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+
+    console.log(`[self_restart] Spawned restart.sh (PID ${child.pid}): ${reason}`);
+
+    return `Restart initiated. Building in background — I'll be back shortly. Reason: ${reason}`;
   },
 };
