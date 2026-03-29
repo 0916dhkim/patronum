@@ -7,7 +7,15 @@ import { runAgentWithSnapshot } from "./run-agent.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
-import { isRestartPending, executeRestart } from "./tools/self-restart.js";
+import {
+  isRestartPending,
+  executeRestart,
+  getRestartMessage,
+  saveRestartState,
+  loadRestartState,
+  type RestartState,
+} from "./tools/self-restart.js";
+import { getCurrentChatId } from "./tools/index.js";
 import { AGENTS } from "./agents.js";
 import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
@@ -203,8 +211,34 @@ export function startBot(): void {
   bot.launch({ allowedUpdates: ["message"] });
   console.log("[patronum] Bot started (async multi-agent mode)");
 
-  if (config.ownerChatId) {
-    bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online (async mode)").catch((err) => {
+  // Check for restart resume state
+  const restartState = loadRestartState();
+  if (restartState && restartState.chatId) {
+    console.log(`[patronum] Resuming after restart: ${restartState.reason}`);
+
+    // Send "back online" notification
+    bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").catch((err) => {
+      console.error("[patronum] Failed to send restart notification:", err);
+    });
+
+    // If there's resume context, inject it as a synthetic message to continue work
+    if (restartState.resumeContext) {
+      setTimeout(() => {
+        const resumeText = `[system] Resumed after restart (${restartState.reason}). Resume context: ${restartState.resumeContext}`;
+        const state = getChatState(restartState.chatId);
+        // Create a synthetic event to trigger the agent
+        const syntheticEvent: ChatEvent = {
+          type: "agent_completion",
+          taskId: "restart-resume",
+          agent: "system",
+          result: resumeText,
+        };
+        state.queue.push(syntheticEvent);
+        processQueue(restartState.chatId, bot, linAgent);
+      }, 2000); // small delay to let Telegram settle
+    }
+  } else if (config.ownerChatId) {
+    bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online").catch((err) => {
       console.error("[patronum] Failed to send startup notification:", err);
     });
   }
@@ -380,6 +414,43 @@ async function handleEvent(
     history.splice(0, history.length, ...compactedHistory);
   }
 
+  // Check if self_restart was called — special flow
+  if (isRestartPending()) {
+    const restartMsg = getRestartMessage();
+
+    // Save resume context before exiting
+    // Find the resume_context from the tool call
+    let resumeContext = "";
+    for (const msg of newMessages) {
+      if (msg.role === "assistant" && Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block.type === "tool_use" && block.name === "self_restart") {
+            const input = block.input as Record<string, unknown>;
+            resumeContext = (input.resume_context as string) || "";
+          }
+        }
+      }
+    }
+
+    saveRestartState({
+      reason: restartMsg,
+      resumeContext,
+      chatId,
+      timestamp: Date.now(),
+    });
+
+    // Send the restart reason directly — no extra Claude call
+    await sendMessageSafe(bot, chatId, `🔄 Restarting: ${restartMsg}`);
+
+    // Save messages to history, then exit
+    for (const msg of newMessages) {
+      saveMessage(chatId, msg);
+    }
+
+    executeRestart();
+    return; // won't reach here but makes control flow clear
+  }
+
   // Extract reply text
   const reply = extractTextFromResponse(newMessages);
 
@@ -398,10 +469,5 @@ async function handleEvent(
   const chunks = splitMessage(reply);
   for (const chunk of chunks) {
     await sendMessageSafe(bot, chatId, chunk);
-  }
-
-  // If self_restart was called during this turn, exit now that the reply is delivered
-  if (isRestartPending()) {
-    executeRestart();
   }
 }
