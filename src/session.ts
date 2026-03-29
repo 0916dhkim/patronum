@@ -21,6 +21,20 @@ export function initSession(): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id, id)
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS archived_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      compacted_at INTEGER NOT NULL,
+      compaction_reason TEXT
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_archived_chat_id ON archived_messages(chat_id, id)
+  `);
 }
 
 export function loadHistory(chatId: string): Message[] {
@@ -64,6 +78,31 @@ export function saveMessage(chatId: string, message: Message): void {
   db.prepare(
     `INSERT INTO messages (chat_id, role, content_json) VALUES (?, ?, ?)`
   ).run(chatId, message.role, contentJson);
+}
+
+/**
+ * Archive messages before they are compacted away, so history is never lost.
+ */
+export function archiveMessages(
+  chatId: string,
+  messages: Message[],
+  reason: string
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  const insert = db.prepare(
+    `INSERT INTO archived_messages (chat_id, role, content_json, created_at, compacted_at, compaction_reason)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const archiveAll = db.transaction(() => {
+    for (const msg of messages) {
+      const contentJson = JSON.stringify(msg.content);
+      insert.run(chatId, msg.role, contentJson, now, now, reason);
+    }
+  });
+  archiveAll();
+  console.log(
+    `[archive] Archived ${messages.length} messages for chat=${chatId} (reason: ${reason})`
+  );
 }
 
 /**

@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { initSession, loadHistory, saveMessage, replaceHistory } from "./session.js";
+import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages } from "./session.js";
 import { initThread, appendToThread, loadThread, formatThreadForContext, compactThread } from "./thread.js";
 import { runAgent, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { runAgentWithSnapshot } from "./run-agent.js";
@@ -350,12 +350,18 @@ async function handleEvent(
 
   // Token-based compaction
   const model = linAgent.model;
+  const fullHistory = [...history, ...newMessages];
   const { messages: compactedHistory, compacted } = await compactIfNeeded(
-    [...history, ...newMessages],
+    fullHistory,
     inputTokens,
     model
   );
   if (compacted) {
+    // Archive the messages that will be replaced (everything not in the compacted set)
+    // The compacted set starts with a summary + ack, so the original messages being
+    // summarized are everything before the kept tail in fullHistory.
+    // Archive the entire pre-compaction history so nothing is lost.
+    archiveMessages(chatId, fullHistory, "70% context window");
     replaceHistory(chatId, compactedHistory);
     history.splice(0, history.length, ...compactedHistory);
   }
