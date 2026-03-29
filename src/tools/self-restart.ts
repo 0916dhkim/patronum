@@ -84,6 +84,16 @@ export const selfRestartTool: ToolHandler = {
     const { getCurrentChatId } = await import("./chat-context.js");
     const chatId = getCurrentChatId() || config.ownerChatId || "";
 
+    // Refuse to restart if there are running tasks — they'd be silently killed
+    const { taskManager } = await import("../task-manager.js");
+    const runningTasks = taskManager.listRunning(chatId);
+    if (runningTasks.length > 0) {
+      const taskList = runningTasks
+        .map((t) => `  • ${t.taskId} — ${t.agent} (${Math.round((Date.now() - t.startedAt) / 1000)}s)`)
+        .join("\n");
+      return `Cannot restart — ${runningTasks.length} task(s) still running:\n${taskList}\n\nCancel them first or wait for them to finish.`;
+    }
+
     const sourceDir = path.join(config.workspace, "source");
     const scriptPath = path.join(sourceDir, "scripts", "restart.sh");
 
