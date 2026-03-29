@@ -4,8 +4,6 @@ import type { Message } from "./types.js";
 import { config } from "./config.js";
 
 const DB_PATH = path.join(config.workspace, "patronum.db");
-const MAX_HISTORY = 100; // load more — compaction will handle trimming
-
 let db: Database.Database;
 
 export function initSession(): void {
@@ -30,12 +28,11 @@ export function loadHistory(chatId: string): Message[] {
     .prepare(
       `SELECT role, content_json FROM messages
        WHERE chat_id = ?
-       ORDER BY id DESC
-       LIMIT ?`
+       ORDER BY id ASC`
     )
-    .all(chatId, MAX_HISTORY) as { role: string; content_json: string }[];
+    .all(chatId) as { role: string; content_json: string }[];
 
-  const messages = rows.reverse().map((row) => ({
+  const messages = rows.map((row) => ({
     role: row.role as Message["role"],
     content: JSON.parse(row.content_json),
   }));
