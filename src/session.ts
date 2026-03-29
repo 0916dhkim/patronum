@@ -4,7 +4,7 @@ import type { Message } from "./types.js";
 import { config } from "./config.js";
 
 const DB_PATH = path.join(config.workspace, "patronum.db");
-const MAX_HISTORY = 50;
+const MAX_HISTORY = 100; // load more — compaction will handle trimming
 
 let db: Database.Database;
 
@@ -50,4 +50,24 @@ export function saveMessage(chatId: string, message: Message): void {
   db.prepare(
     `INSERT INTO messages (chat_id, role, content_json) VALUES (?, ?, ?)`
   ).run(chatId, message.role, contentJson);
+}
+
+/**
+ * Replace all stored messages for a chat with a new set (used after compaction).
+ */
+export function replaceHistory(chatId: string, messages: Message[]): void {
+  const deleteStmt = db.prepare(`DELETE FROM messages WHERE chat_id = ?`);
+  const insertStmt = db.prepare(
+    `INSERT INTO messages (chat_id, role, content_json) VALUES (?, ?, ?)`
+  );
+
+  const replaceAll = db.transaction(() => {
+    deleteStmt.run(chatId);
+    for (const msg of messages) {
+      const contentJson = JSON.stringify(msg.content);
+      insertStmt.run(chatId, msg.role, contentJson);
+    }
+  });
+
+  replaceAll();
 }

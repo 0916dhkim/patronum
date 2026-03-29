@@ -1,8 +1,12 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { initSession, loadHistory, saveMessage } from "./session.js";
+import { initSession, loadHistory, saveMessage, replaceHistory } from "./session.js";
+import { initThread, appendToThread, loadThread, formatThreadForContext, compactThread } from "./thread.js";
 import { runAgent, extractTextFromResponse } from "./agent.js";
+import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
+import { setCurrentChatId } from "./tools/index.js";
+import { AGENTS } from "./agents.js";
 import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
@@ -92,8 +96,10 @@ async function sendMessageSafe(
 
 export function startBot(): void {
   initSession();
+  initThread();
 
   const bot = new Telegraf(config.telegramBotToken);
+  const linAgent = AGENTS.lin;
 
   bot.on("text", async (ctx) => {
     const chatId = String(ctx.chat.id);
@@ -101,7 +107,23 @@ export function startBot(): void {
 
     console.log(`[msg] chat=${chatId}: ${userText.slice(0, 100)}`);
 
-    // Load history and add new user message
+    // Set chat ID so run_agent tool knows the current context
+    setCurrentChatId(chatId);
+
+    // --- Thread: append user message ---
+    appendToThread(chatId, "user", userText);
+
+    // Auto-compact thread before running Lin
+    try {
+      const didCompact = await compactThread(chatId);
+      if (didCompact) {
+        console.log(`[bot] Thread compacted for chat=${chatId}`);
+      }
+    } catch (err) {
+      console.error(`[bot] Thread compaction failed (continuing):`, err);
+    }
+
+    // --- Legacy session history (kept for compaction compatibility) ---
     const history = loadHistory(chatId);
     const userMessage: Message = { role: "user", content: userText };
     history.push(userMessage);
@@ -111,18 +133,37 @@ export function startBot(): void {
       // Show typing indicator while processing
       await ctx.sendChatAction("typing");
 
-      // Run agent loop
-      const newMessages = await runAgent(history);
+      // Compact session history if needed
+      const { messages: compactedHistory, compacted } = await compactIfNeeded(history);
+      if (compacted) {
+        replaceHistory(chatId, compactedHistory);
+        history.splice(0, history.length, ...compactedHistory);
+      }
 
-      // Save all new messages
+      // Load thread context for Lin
+      const thread = loadThread(chatId);
+      const threadContext = formatThreadForContext(thread);
+
+      // Run Lin with thread context injected into system prompt
+      const newMessages = await runAgent(history, {
+        model: linAgent.model,
+        workspace: linAgent.workspaceDir,
+        extraContext: [threadContext],
+      });
+
+      // Save all new messages to session history
       for (const msg of newMessages) {
         saveMessage(chatId, msg);
       }
 
-      // Extract reply text and send
+      // Extract reply text
       const reply = extractTextFromResponse(newMessages);
-      const chunks = splitMessage(reply);
 
+      // Append Lin's response to the shared thread
+      appendToThread(chatId, "lin", reply);
+
+      // Send to Telegram
+      const chunks = splitMessage(reply);
       for (const chunk of chunks) {
         await sendMessageSafe(bot, ctx.chat.id, chunk);
       }
@@ -134,7 +175,7 @@ export function startBot(): void {
   });
 
   bot.launch();
-  console.log("[patronum] Bot started");
+  console.log("[patronum] Bot started (multi-agent mode)");
 
   // Graceful shutdown
   process.once("SIGINT", () => bot.stop("SIGINT"));

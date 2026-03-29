@@ -3,8 +3,11 @@ import { execTool } from "./exec.js";
 import { readTool } from "./read.js";
 import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
+import { runAgentTool } from "./run-agent.js";
 
-const tools: ToolHandler[] = [execTool, readTool, writeTool, editTool];
+export { setCurrentChatId } from "./run-agent.js";
+
+const tools: ToolHandler[] = [execTool, readTool, writeTool, editTool, runAgentTool];
 
 const toolMap = new Map<string, ToolHandler>(
   tools.map((t) => [t.definition.name, t])

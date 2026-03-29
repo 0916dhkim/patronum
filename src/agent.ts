@@ -15,18 +15,39 @@ const MAX_TOKENS = 8192;
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-function buildSystemPrompt(): Array<{ type: "text"; text: string }> {
+export interface AgentOptions {
+  /** Override the model (defaults to config.claudeModel) */
+  model?: string;
+  /** Override workspace for loading SOUL.md/AGENTS.md */
+  workspace?: string;
+  /** Additional system context blocks (e.g. thread context) */
+  extraContext?: string[];
+}
+
+function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
+  const workspace = options?.workspace || config.workspace;
+
   const system: Array<{ type: "text"; text: string }> = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
-  const soul = loadContextFile(config.workspace, "SOUL.md");
+  const soul = loadContextFile(workspace, "SOUL.md");
   if (soul) system.push({ type: "text", text: soul });
-  const agents = loadContextFile(config.workspace, "AGENTS.md");
+  const agents = loadContextFile(workspace, "AGENTS.md");
   if (agents) system.push({ type: "text", text: agents });
+
+  // Append any extra context (thread, etc.)
+  if (options?.extraContext) {
+    for (const ctx of options.extraContext) {
+      if (ctx) system.push({ type: "text", text: ctx });
+    }
+  }
+
   return system;
 }
 
-async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
+async function callClaude(messages: Message[], options?: AgentOptions): Promise<ClaudeResponse> {
+  const model = options?.model || config.claudeModel;
+
   const response = await fetch(API_URL, {
     method: "POST",
     headers: {
@@ -39,9 +60,9 @@ async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: config.claudeModel,
+      model,
       max_tokens: MAX_TOKENS,
-      system: buildSystemPrompt(),
+      system: buildSystemPrompt(options),
       tools: getToolDefinitions(),
       messages,
     }),
@@ -55,13 +76,13 @@ async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
   return (await response.json()) as ClaudeResponse;
 }
 
-export async function runAgent(messages: Message[]): Promise<Message[]> {
+export async function runAgent(messages: Message[], options?: AgentOptions): Promise<Message[]> {
   const conversation = [...messages];
   const newMessages: Message[] = [];
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const response = await callClaude(conversation);
+    const response = await callClaude(conversation, options);
 
     const assistantMessage: Message = {
       role: "assistant",
