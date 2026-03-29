@@ -1,7 +1,7 @@
 import type { ToolHandler } from "../types.js";
 import { taskManager } from "../task-manager.js";
 import { loadThread } from "../thread.js";
-import { getCurrentChatId } from "./run-agent.js";
+import { getCurrentChatId } from "./chat-context.js";
 
 // The actual execution callback is set by bot.ts to avoid circular imports
 let spawnCallback: ((taskId: string, agentName: string, task: string, chatId: string) => void) | null = null;

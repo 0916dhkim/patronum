@@ -1,6 +1,6 @@
 import type { ToolHandler } from "../types.js";
 import { taskManager } from "../task-manager.js";
-import { getCurrentChatId } from "./run-agent.js";
+import { getCurrentChatId } from "./chat-context.js";
 
 export const listTasksTool: ToolHandler = {
   definition: {
