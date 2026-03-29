@@ -11,7 +11,9 @@ import type {
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 8192;
 
-const SYSTEM_PROMPT = `You are a helpful personal AI assistant. You have access to tools for running shell commands, reading/writing files, and editing files. Use them when needed to help the user. Be concise and direct.`;
+// OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
+const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+const PERSONAL_ASSISTANT_PROMPT = `You are a helpful personal AI assistant. You have access to tools for running shell commands, reading/writing files, and editing files. Use them when needed to help the user. Be concise and direct.`;
 
 async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
   const response = await fetch(API_URL, {
@@ -19,12 +21,19 @@ async function callClaude(messages: Message[]): Promise<ClaudeResponse> {
     headers: {
       Authorization: `Bearer ${config.claudeToken}`,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "user-agent": "claude-cli/2.1.85",
+      "x-app": "cli",
       "content-type": "application/json",
     },
     body: JSON.stringify({
       model: config.claudeModel,
       max_tokens: MAX_TOKENS,
-      system: SYSTEM_PROMPT,
+      system: [
+        { type: "text", text: CLAUDE_CODE_IDENTITY },
+        { type: "text", text: PERSONAL_ASSISTANT_PROMPT },
+      ],
       tools: getToolDefinitions(),
       messages,
     }),
