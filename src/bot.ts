@@ -107,11 +107,8 @@ export function startBot(): void {
     history.push(userMessage);
     saveMessage(chatId, userMessage);
 
-    // Send placeholder immediately
-    const placeholder = await ctx.reply("⏳");
-
     try {
-      // Send typing indicator
+      // Show typing indicator while processing
       await ctx.sendChatAction("typing");
 
       // Run agent loop
@@ -122,30 +119,17 @@ export function startBot(): void {
         saveMessage(chatId, msg);
       }
 
-      // Extract reply text
+      // Extract reply text and send
       const reply = extractTextFromResponse(newMessages);
       const chunks = splitMessage(reply);
 
-      // Edit placeholder with first chunk
-      await editMessageSafe(bot, ctx.chat.id, placeholder.message_id, chunks[0]);
-
-      // Send remaining chunks as new messages
-      for (let i = 1; i < chunks.length; i++) {
-        await sendMessageSafe(bot, ctx.chat.id, chunks[i]);
+      for (const chunk of chunks) {
+        await sendMessageSafe(bot, ctx.chat.id, chunk);
       }
     } catch (err) {
       console.error("[error]", err);
       const msg = err instanceof Error ? err.message : String(err);
-      try {
-        await bot.telegram.editMessageText(
-          ctx.chat.id,
-          placeholder.message_id,
-          undefined,
-          `Error: ${msg.slice(0, 500)}`
-        );
-      } catch {
-        await ctx.reply(`Error: ${msg.slice(0, 500)}`);
-      }
+      await ctx.reply(`Error: ${msg.slice(0, 500)}`);
     }
   });
 
