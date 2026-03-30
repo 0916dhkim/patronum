@@ -127,7 +127,6 @@ export function startBot(): void {
     handlerTimeout: Infinity,
   });
   setBot(bot);
-  const mainAgent = AGENTS.main;
   const BOT_START_TIME = Math.floor(Date.now() / 1000);
 
   // -------------------------------------------------------------------
@@ -161,7 +160,7 @@ export function startBot(): void {
           agent: agentName,
           result,
         });
-        processQueue(chatId, bot, mainAgent);
+        processQueue(chatId, bot);
       })
       .catch((err) => {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -187,7 +186,7 @@ export function startBot(): void {
           agent: agentName,
           error: errorMsg,
         });
-        processQueue(chatId, bot, mainAgent);
+        processQueue(chatId, bot);
       });
   });
 
@@ -216,7 +215,7 @@ export function startBot(): void {
     // Enqueue and process
     const state = getChatState(chatId);
     state.queue.push({ type: "user_message", text: userText, ctx });
-    processQueue(chatId, bot, mainAgent);
+    processQueue(chatId, bot);
   });
 
   bot.launch({ allowedUpdates: ["message"] });
@@ -248,7 +247,7 @@ export function startBot(): void {
           result: resumeText,
         };
         state.queue.push(syntheticEvent);
-        processQueue(restartState.chatId, bot, mainAgent);
+        processQueue(restartState.chatId, bot);
       }, 2000); // small delay to let Telegram settle
     }
   } else if (config.ownerChatId) {
@@ -290,7 +289,6 @@ export function startBot(): void {
 async function processQueue(
   chatId: string,
   bot: Telegraf,
-  mainAgent: { model: string; workspaceDir: string }
 ): Promise<void> {
   const state = getChatState(chatId);
 
@@ -304,7 +302,7 @@ async function processQueue(
       const event = state.queue.shift()!;
 
       try {
-        await handleEvent(event, chatId, bot, mainAgent);
+        await handleEvent(event, chatId, bot);
       } catch (err) {
         console.error(`[processQueue] Error handling event in chat=${chatId}:`, err);
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -326,7 +324,6 @@ async function handleEvent(
   event: ChatEvent,
   chatId: string,
   bot: Telegraf,
-  mainAgent: { model: string; workspaceDir: string }
 ): Promise<void> {
   // Ensure tools point to correct chat
   setCurrentChatId(chatId);
@@ -396,8 +393,8 @@ async function handleEvent(
 
   // Run Lin
   const agentResult = await runAgent(history, {
-    model: mainAgent.model,
-    workspace: mainAgent.workspaceDir,
+    model: config.claudeModel,
+    workspace: config.workspace,
     extraContext: [threadContext, ...extraContext],
   });
 
@@ -409,7 +406,7 @@ async function handleEvent(
   }
 
   // Token-based compaction
-  const model = mainAgent.model;
+  const model = config.claudeModel;
   const fullHistory = [...history, ...newMessages];
   const { messages: compactedHistory, compacted } = await compactIfNeeded(
     fullHistory,
