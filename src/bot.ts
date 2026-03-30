@@ -91,16 +91,19 @@ function splitMessage(text: string): string[] {
 async function sendMessageSafe(
   bot: Telegraf,
   chatId: number | string,
-  text: string
+  text: string,
+  replyToMessageId?: number
 ): Promise<void> {
   const html = markdownToTelegramHtml(text);
+  const extra: Parameters<typeof bot.telegram.sendMessage>[2] = {
+    parse_mode: "HTML",
+    ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}),
+  };
   try {
-    await bot.telegram.sendMessage(chatId, html, {
-      parse_mode: "HTML",
-    });
+    await bot.telegram.sendMessage(chatId, html, extra);
   } catch {
     try {
-      await bot.telegram.sendMessage(chatId, text);
+      await bot.telegram.sendMessage(chatId, text, replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : undefined);
     } catch (e2) {
       console.error("[send-fallback] Failed to send message:", e2);
     }
@@ -586,10 +589,18 @@ async function handleEvent(
     });
   }
 
+  // Extract reply-to message ID from the triggering user event (if available)
+  // Replying to the user's message gives Telegram a valid reference so the
+  // draft → final message transition renders cleanly (no "Deleted message" artifact).
+  const replyToMessageId =
+    (event.type === "user_message" || event.type === "user_photo")
+      ? (event.ctx.message as { message_id?: number } | undefined)?.message_id
+      : undefined;
+
   // Send to Telegram
   const chunks = splitMessage(reply);
   for (const chunk of chunks) {
-    await sendMessageSafe(bot, chatId, chunk);
+    await sendMessageSafe(bot, chatId, chunk, replyToMessageId);
   }
 
   } finally {
