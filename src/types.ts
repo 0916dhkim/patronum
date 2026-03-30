@@ -6,6 +6,15 @@ export interface TextBlock {
   cache_control?: CacheControl;
 }
 
+export interface ImageBlock {
+  type: "image";
+  source: {
+    type: "base64";
+    media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+    data: string;
+  };
+}
+
 export interface ToolUseBlock {
   type: "tool_use";
   id: string;
@@ -21,7 +30,7 @@ export interface ToolResultBlock {
   cache_control?: CacheControl;
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+export type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
 export interface CacheControl {
   type: "ephemeral";
