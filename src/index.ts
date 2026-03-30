@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { initConfig, config } from "./config.js";
+import { resetAgentsCache } from "./agents.js";
 import { startBot } from "./bot.js";
 import { DEFAULT_SOUL, DEFAULT_AGENTS } from "./templates.js";
 
@@ -23,6 +24,8 @@ function ensureWorkspaceFiles(): void {
 console.log("[patronum] Starting...");
 initConfig()
   .then(() => {
+    // Reset agent cache so models are resolved with the now-loaded config
+    resetAgentsCache();
     ensureWorkspaceFiles();
     return startBot();
   })

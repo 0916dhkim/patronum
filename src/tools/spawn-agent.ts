@@ -21,7 +21,8 @@ export const spawnAgentTool: ToolHandler = {
       properties: {
         agent: {
           type: "string",
-          description: "Which workspace-defined specialist agent to spawn",
+          enum: ["alex", "iris", "junior", "quill"], // static fallback — overridden at runtime by getSubagentNames()
+          description: "Which specialist agent to spawn",
         },
         task: {
           type: "string",
