@@ -1,5 +1,6 @@
 import path from "node:path";
-import { config } from "./config.js";
+import { readdirSync, existsSync } from "node:fs";
+import { config, getAgentOverrides } from "./config.js";
 
 export interface AgentDef {
   name: string;
@@ -9,28 +10,27 @@ export interface AgentDef {
 
 function buildAgents(): Record<string, AgentDef> {
   const agentsDir = path.join(config.workspace, "agents");
-  return {
-    lin: {
-      name: "lin",
-      model: config.claudeModel,
-      workspaceDir: path.join(agentsDir, "lin"),
-    },
-    alex: {
-      name: "alex",
-      model: "claude-opus-4-6",
-      workspaceDir: path.join(agentsDir, "alex"),
-    },
-    iris: {
-      name: "iris",
-      model: config.claudeModel,
-      workspaceDir: path.join(agentsDir, "iris"),
-    },
-    quill: {
-      name: "quill",
-      model: config.claudeModel,
-      workspaceDir: path.join(agentsDir, "quill"),
-    },
-  };
+  const overrides = getAgentOverrides();
+  const agents: Record<string, AgentDef> = {};
+
+  // Auto-register any subdirectory in agents/ that has a SOUL.md
+  if (existsSync(agentsDir)) {
+    for (const entry of readdirSync(agentsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const name = entry.name;
+      const agentDir = path.join(agentsDir, name);
+      if (!existsSync(path.join(agentDir, "SOUL.md"))) continue;
+
+      const override = overrides[name] ?? {};
+      agents[name] = {
+        name,
+        model: override.model || config.claudeModel,
+        workspaceDir: agentDir,
+      };
+    }
+  }
+
+  return agents;
 }
 
 // Lazy init — accessed after config is loaded
