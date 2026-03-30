@@ -40,10 +40,22 @@ function buildAgents(): Record<string, AgentDef> {
   const agentsDir = path.join(config.workspace, "agents");
   const agents: Record<string, AgentDef> = {};
 
+  // Lin always exists — it's the main agent, not discovered from SUBAGENT.md
+  agents.lin = {
+    name: "lin",
+    model: config.claudeModel,
+    workspaceDir: existsSync(path.join(agentsDir, "lin"))
+      ? path.join(agentsDir, "lin")
+      : config.workspace,
+    description: "Main orchestrator agent",
+    systemPrompt: "",
+  };
+
   if (!existsSync(agentsDir)) return agents;
 
   for (const entry of readdirSync(agentsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
+    if (entry.name === "lin") continue; // lin is hardcoded above
     const agentDir = path.join(agentsDir, entry.name);
     const subagentPath = path.join(agentDir, "SUBAGENT.md");
 
