@@ -31,7 +31,8 @@ ${sourceDir}/
 │   ├── project-context.ts — This file (project self-knowledge)
 │   ├── format.ts         — Markdown → Telegram HTML conversion
 │   ├── types.ts          — TypeScript types for Claude API
-│   ├── agents.ts         — Dynamic workspace subagent loader
+│   ├── agents.ts         — Agent definitions (lin, alex, iris, quill)
+│   ├── skills.ts         — Skill definitions (auto-discovered from skills/)
 │   ├── run-agent.ts      — Run agent with thread snapshot
 │   ├── task-manager.ts   — Background task tracking
 │   ├── memory/
@@ -64,6 +65,8 @@ Workspace root: ${config.workspace}
 ├── AGENTS.md       — Your rules and preferences (user-editable)
 ├── MEMORY.md       — Curated persistent facts (you can edit this)
 ├── patronum.db     — SQLite database (messages, memory, threads)
+├── skills/         — Skill definitions (SKILL.md with frontmatter, auto-discovered)
+└── .env            — Environment config (tokens, model)
 
 ## Self-Editing Workflow
 

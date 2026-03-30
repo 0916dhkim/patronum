@@ -10,32 +10,21 @@ export interface AgentDef {
   systemPrompt: string; // body of SUBAGENT.md (below frontmatter)
 }
 
-interface SubagentFrontmatter {
-  name?: string;
-  description?: string;
-  model?: string;
-}
-
-interface ParsedSubagent {
-  definition: AgentDef;
-  sourcePath: string;
-}
-
 /**
  * Parse YAML-style frontmatter from a markdown file.
  * Returns { frontmatter, body }.
  */
-function parseFrontmatter(content: string): { frontmatter: SubagentFrontmatter; body: string } {
+export function parseFrontmatter(content: string): { frontmatter: Record<string, string>; body: string } {
   const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match) return { frontmatter: {}, body: content };
 
-  const frontmatter: SubagentFrontmatter = {};
+  const frontmatter: Record<string, string> = {};
   for (const line of match[1].split("\n")) {
     const colon = line.indexOf(":");
     if (colon === -1) continue;
     const key = line.slice(0, colon).trim();
     const value = line.slice(colon + 1).trim();
-    (frontmatter as Record<string, string>)[key] = value;
+    frontmatter[key] = value;
   }
 
   return { frontmatter, body: match[2].trim() };
