@@ -1,4 +1,5 @@
 import { Telegraf } from "telegraf";
+import { markdownToTelegramHtml } from "./format.js";
 
 /**
  * Manages throttled Telegram draft message updates.
@@ -65,7 +66,8 @@ export class DraftStreamer {
 
   /**
    * Actually send the draft to Telegram.
-   * No parse_mode — drafts are raw text to avoid breaking on partial markdown.
+   * Converts markdown to Telegram HTML before sending.
+   * Falls back to raw text if conversion fails on partial markdown.
    */
   private async flush(): Promise<void> {
     if (this.failed) return;
@@ -75,14 +77,30 @@ export class DraftStreamer {
     this.lastSentText = this.pendingText;
     this.lastSendTime = Date.now();
 
+    // Try to convert markdown to Telegram HTML for rich-text drafts.
+    // If conversion throws (e.g. malformed partial markdown), fall back to raw text.
+    let text: string;
+    let parseMode: string | undefined;
+
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.bot.telegram as any).callApi("sendMessageDraft", {
+      text = markdownToTelegramHtml(this.pendingText);
+      parseMode = "HTML";
+    } catch {
+      text = this.pendingText;
+      parseMode = undefined;
+    }
+
+    try {
+      const params: Record<string, unknown> = {
         chat_id: this.chatId,
         draft_id: this.draftId,
-        text: this.pendingText,
-        // NO parse_mode — partial text would break HTML/Markdown parsing
-      });
+        text,
+      };
+      if (parseMode) {
+        params.parse_mode = parseMode;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (this.bot.telegram as any).callApi("sendMessageDraft", params);
     } catch (err) {
       console.warn("[draft] sendMessageDraft not supported or failed, disabling:", err);
       this.failed = true;
