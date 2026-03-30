@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { config } from "./config.js";
 import { AGENTS } from "./agents.js";
 import { loadThread, appendToThread, formatThreadForContext } from "./thread.js";
@@ -17,15 +15,6 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 8192;
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-function loadAgentContextFile(workspaceDir: string, filename: string): string | null {
-  try {
-    const filePath = path.join(workspaceDir, filename);
-    return fs.readFileSync(filePath, "utf-8").trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 function buildAgentSystemPrompt(
   agentName: string,
   threadContext: string
@@ -37,13 +26,10 @@ function buildAgentSystemPrompt(
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
 
-  // Load agent's SOUL.md
-  const soul = loadAgentContextFile(agent.workspaceDir, "SOUL.md");
-  if (soul) system.push({ type: "text", text: soul });
-
-  // Load agent's AGENTS.md
-  const agents = loadAgentContextFile(agent.workspaceDir, "AGENTS.md");
-  if (agents) system.push({ type: "text", text: agents });
+  // Use the system prompt from SUBAGENT.md body
+  if (agent.systemPrompt) {
+    system.push({ type: "text", text: agent.systemPrompt });
+  }
 
   // Include the shared thread as context
   if (threadContext) {

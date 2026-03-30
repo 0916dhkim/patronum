@@ -2,6 +2,7 @@ import { config } from "./config.js";
 import { loadContextFile } from "./context.js";
 import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
+import { buildSubagentsSummary } from "./agents.js";
 
 import type {
   Message,
@@ -41,6 +42,10 @@ function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: 
 
   // Always inject project self-knowledge
   system.push({ type: "text", text: getProjectContext() });
+
+  // Inject available subagents summary for routing decisions
+  const subagentsSummary = buildSubagentsSummary();
+  if (subagentsSummary) system.push({ type: "text", text: subagentsSummary });
 
   // Append any extra context (thread, etc.)
   if (options?.extraContext) {
