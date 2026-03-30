@@ -124,6 +124,13 @@ export class TaskManager {
   }
 
   /**
+   * Count all running tasks across all chats.
+   */
+  countRunning(): number {
+    return Array.from(this.tasks.values()).filter((t) => t.status === "running").length;
+  }
+
+  /**
    * Remove finished tasks older than TASK_TTL_MS.
    */
   private cleanupOldTasks(): void {

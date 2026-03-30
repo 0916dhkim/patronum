@@ -202,6 +202,48 @@ export function startBot(): void {
   });
 
   // -------------------------------------------------------------------
+  // Status command handler
+  // -------------------------------------------------------------------
+  bot.command("status", async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    const now = Math.floor(Date.now() / 1000);
+    const uptimeSeconds = now - BOT_START_TIME;
+
+    // Format uptime as human-readable
+    const days = Math.floor(uptimeSeconds / 86400);
+    const hours = Math.floor((uptimeSeconds % 86400) / 3600);
+    const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+    const seconds = uptimeSeconds % 60;
+
+    let uptimeStr = "";
+    if (days > 0) {
+      uptimeStr = `${days}d ${hours}h`;
+    } else if (hours > 0) {
+      uptimeStr = `${hours}h ${minutes}m`;
+    } else if (minutes > 0) {
+      uptimeStr = `${minutes}m ${seconds}s`;
+    } else {
+      uptimeStr = `${seconds}s`;
+    }
+
+    const chunkCount = getChunkCount();
+    const activeTasks = taskManager.countRunning();
+    const model = config.claudeModel;
+
+    const statusMsg = `🟢 Patronum Status
+
+⏱ Uptime: ${uptimeStr}
+🧠 Memory: ${chunkCount.toLocaleString()} chunks
+⚙️ Active tasks: ${activeTasks}
+🤖 Model: ${model}`;
+
+    try {
+      await bot.telegram.sendMessage(chatId, statusMsg);
+    } catch (err) {
+      console.error("[status] Failed to send status message:", err);
+    }
+  });
+
   // Message handler: enqueue events, don't block
   // -------------------------------------------------------------------
   bot.on("text", async (ctx) => {
