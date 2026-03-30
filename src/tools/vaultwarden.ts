@@ -5,18 +5,25 @@ import type { ToolHandler } from "../types.js";
 // --- Types ---
 
 interface VaultCipher {
-  Id: string;
-  Type: number; // 1=Login, 2=SecureNote, 3=Card, 4=Identity
-  Name: string; // encrypted
-  Notes: string | null; // encrypted
-  Login:
+  id: string;
+  type: number; // 1=Login, 2=SecureNote, 3=Card, 4=Identity
+  name: string; // encrypted
+  notes: string | null; // encrypted
+  organizationId: string | null;
+  key: string | null; // per-item key, encrypted
+  login:
     | {
-        Username: string | null; // encrypted
-        Password: string | null; // encrypted
-        Totp: string | null; // encrypted
-        Uris: Array<{ Uri: string }> | null; // each Uri is encrypted
+        username: string | null; // encrypted
+        password: string | null; // encrypted
+        totp: string | null; // encrypted
+        uris: Array<{ uri: string }> | null; // each uri is encrypted
       }
     | null;
+}
+
+interface OrgKeys {
+  encKey: Buffer;
+  macKey: Buffer;
 }
 
 interface DecryptedItem {
@@ -100,6 +107,8 @@ class VaultSession {
   private tokenExpiry: number = 0;
   private userEncKey: Buffer | null = null;
   private userMacKey: Buffer | null = null;
+  private privateKeyDer: Buffer | null = null;
+  private orgKeys: Map<string, OrgKeys> = new Map();
   private cachedCiphers: VaultCipher[] | null = null;
   private cacheTime: number = 0;
   private static readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -196,8 +205,45 @@ class VaultSession {
       return result;
     }
     if (!res.ok) throw new Error(`Vault sync failed: ${res.status}`);
-    const data = (await res.json()) as { Ciphers: VaultCipher[] };
-    return data.Ciphers;
+    const data = (await res.json()) as {
+      ciphers: VaultCipher[];
+      profile: {
+        privateKey: string;
+        organizations: Array<{ id: string; key: string }>;
+      };
+    };
+
+    // Decrypt user's RSA private key (needed to unwrap org keys)
+    if (data.profile?.privateKey && this.userEncKey && this.userMacKey) {
+      try {
+        this.privateKeyDer = decryptCipherString(data.profile.privateKey, this.userEncKey, this.userMacKey);
+      } catch {
+        // Non-fatal — personal vault items still work without it
+      }
+    }
+
+    // Decrypt org symmetric keys using RSA private key
+    this.orgKeys.clear();
+    if (this.privateKeyDer && data.profile?.organizations) {
+      const privateKeyObj = crypto.createPrivateKey({ key: this.privateKeyDer, format: "der", type: "pkcs8" });
+      for (const org of data.profile.organizations) {
+        if (!org.key) continue;
+        try {
+          // Org key is type 4 = RSA-OAEP encrypted, format: "4.<base64>"
+          const dotIdx = org.key.indexOf(".");
+          const orgKeyEncrypted = Buffer.from(org.key.substring(dotIdx + 1), "base64");
+          const orgKeyBuf = crypto.privateDecrypt(
+            { key: privateKeyObj, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha1" },
+            orgKeyEncrypted
+          );
+          this.orgKeys.set(org.id, { encKey: orgKeyBuf.subarray(0, 32), macKey: orgKeyBuf.subarray(32, 64) });
+        } catch {
+          // Skip orgs we can't decrypt
+        }
+      }
+    }
+
+    return data.ciphers;
   }
 
   async getItems(): Promise<VaultCipher[]> {
@@ -211,8 +257,17 @@ class VaultSession {
   }
 
   decryptItem(cipher: VaultCipher): DecryptedItem {
-    const encKey = this.userEncKey!;
-    const macKey = this.userMacKey!;
+    // Use org key if cipher belongs to an org, otherwise use user key
+    let encKey: Buffer;
+    let macKey: Buffer;
+    if (cipher.organizationId && this.orgKeys.has(cipher.organizationId)) {
+      const orgKey = this.orgKeys.get(cipher.organizationId)!;
+      encKey = orgKey.encKey;
+      macKey = orgKey.macKey;
+    } else {
+      encKey = this.userEncKey!;
+      macKey = this.userMacKey!;
+    }
 
     const typeMap: Record<number, string> = {
       1: "Login",
@@ -222,23 +277,23 @@ class VaultSession {
     };
 
     const item: DecryptedItem = {
-      id: cipher.Id,
-      type: typeMap[cipher.Type] || `Type${cipher.Type}`,
-      name: decryptToString(cipher.Name, encKey, macKey) || "(unknown)",
+      id: cipher.id,
+      type: typeMap[cipher.type] || `Type${cipher.type}`,
+      name: decryptToString(cipher.name, encKey, macKey) || "(unknown)",
     };
 
-    if (cipher.Login) {
-      item.username = decryptToString(cipher.Login.Username, encKey, macKey);
-      item.password = decryptToString(cipher.Login.Password, encKey, macKey);
-      item.totp = decryptToString(cipher.Login.Totp, encKey, macKey);
-      if (cipher.Login.Uris) {
-        item.urls = cipher.Login.Uris.map(u => decryptToString(u.Uri, encKey, macKey)).filter(
+    if (cipher.login) {
+      item.username = decryptToString(cipher.login.username, encKey, macKey);
+      item.password = decryptToString(cipher.login.password, encKey, macKey);
+      item.totp = decryptToString(cipher.login.totp, encKey, macKey);
+      if (cipher.login.uris) {
+        item.urls = cipher.login.uris.map(u => decryptToString(u.uri, encKey, macKey)).filter(
           (u): u is string => !!u
         );
       }
     }
 
-    item.notes = decryptToString(cipher.Notes, encKey, macKey);
+    item.notes = decryptToString(cipher.notes, encKey, macKey);
     return item;
   }
 
@@ -247,6 +302,8 @@ class VaultSession {
     this.tokenExpiry = 0;
     this.userEncKey = null;
     this.userMacKey = null;
+    this.privateKeyDer = null;
+    this.orgKeys.clear();
     this.cachedCiphers = null;
     this.retrying401 = false;
   }
