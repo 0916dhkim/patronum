@@ -10,6 +10,7 @@ import { listTasksTool } from "./list-tasks.js";
 import { memorySearchTool, memoryWriteTool } from "../memory/index.js";
 import { selfRestartTool } from "./self-restart.js";
 import { searchTool } from "./search.js";
+import { vaultwardenTool } from "./vaultwarden.js";
 
 export { setCurrentChatId, getCurrentChatId } from "./chat-context.js";
 export { setBot, setSendMediaChatId };
@@ -28,6 +29,7 @@ const tools: ToolHandler[] = [
   memoryWriteTool,
   selfRestartTool,
   searchTool,
+  vaultwardenTool,
 ];
 
 const toolMap = new Map<string, ToolHandler>(

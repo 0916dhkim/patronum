@@ -9,6 +9,9 @@ export interface Config {
   workspace: string;
   ownerChatId: string;
   voyageApiKey: string;
+  vaultwardenUrl: string;
+  vaultwardenEmail: string;
+  vaultwardenMasterPassword: string;
 }
 
 // Mutable config — populated by initConfig() before use
@@ -19,6 +22,9 @@ export const config: Config = {
   workspace: "",
   ownerChatId: "",
   voyageApiKey: "",
+  vaultwardenUrl: "",
+  vaultwardenEmail: "",
+  vaultwardenMasterPassword: "",
 };
 
 export async function initConfig(): Promise<void> {
@@ -34,6 +40,11 @@ export async function initConfig(): Promise<void> {
   config.claudeToken = getRequiredString(credentials, "credentials.claude_token", "claude_token", tomlPath);
   config.telegramBotToken = getRequiredString(credentials, "credentials.telegram_bot_token", "telegram_bot_token", tomlPath);
   config.voyageApiKey = getOptionalString(credentials, "credentials.voyage_api_key", "voyage_api_key", tomlPath) ?? "";
+
+  const vaultwarden = getOptionalTable(data, "vaultwarden", tomlPath) ?? {};
+  config.vaultwardenUrl = getOptionalString(vaultwarden, "vaultwarden.url", "url", tomlPath) ?? "";
+  config.vaultwardenEmail = getOptionalString(vaultwarden, "vaultwarden.email", "email", tomlPath) ?? "";
+  config.vaultwardenMasterPassword = getOptionalString(vaultwarden, "vaultwarden.master_password", "master_password", tomlPath) ?? "";
 }
 
 function findWorkspace(): string {
