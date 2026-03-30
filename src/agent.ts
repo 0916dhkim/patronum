@@ -3,18 +3,15 @@ import { loadContextFile } from "./context.js";
 import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import { buildSubagentsSummary } from "./agents.js";
-import {
-  getTotalInputTokens,
-  logUsage,
-  prepareMessagesForClaude,
-  prepareSystemPromptForClaude,
-} from "./prompt-cache.js";
+import { buildSkillsSummary, buildSkillBodies } from "./skills.js";
 
 import type {
   Message,
   ClaudeResponse,
+  ContentBlock,
   ToolUseBlock,
   ToolResultBlock,
+  StreamEvent,
   TextBlock,
 } from "./types.js";
 
@@ -29,14 +26,14 @@ export interface AgentOptions {
   model?: string;
   /** Override workspace for loading SOUL.md/AGENTS.md */
   workspace?: string;
-  /** Number of leading messages that belong to completed prior turns */
-  completedPrefixLength?: number;
+  /** Additional system context blocks (e.g. thread context) */
+  extraContext?: string[];
 }
 
-function buildSystemPrompt(options?: AgentOptions): TextBlock[] {
+function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
   const workspace = options?.workspace || config.workspace;
 
-  const system: TextBlock[] = [
+  const system: Array<{ type: "text"; text: string }> = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
   const soul = loadContextFile(workspace, "SOUL.md");
@@ -52,6 +49,21 @@ function buildSystemPrompt(options?: AgentOptions): TextBlock[] {
   // Inject available subagents summary for routing decisions
   const subagentsSummary = buildSubagentsSummary();
   if (subagentsSummary) system.push({ type: "text", text: subagentsSummary });
+
+  // Inject available skills summary
+  const skillsSummary = buildSkillsSummary();
+  if (skillsSummary) system.push({ type: "text", text: skillsSummary });
+
+  // Inject full skill instruction bodies
+  const skillBodies = buildSkillBodies();
+  if (skillBodies) system.push({ type: "text", text: skillBodies });
+
+  // Append any extra context (thread, etc.)
+  if (options?.extraContext) {
+    for (const ctx of options.extraContext) {
+      if (ctx) system.push({ type: "text", text: ctx });
+    }
+  }
 
   return system;
 }
@@ -73,11 +85,9 @@ async function callClaude(messages: Message[], options?: AgentOptions, signal?: 
     body: JSON.stringify({
       model,
       max_tokens: MAX_TOKENS,
-      system: prepareSystemPromptForClaude(buildSystemPrompt(options)),
+      system: buildSystemPrompt(options),
       tools: getToolDefinitions(),
-      messages: prepareMessagesForClaude(messages, {
-        completedPrefixLength: options?.completedPrefixLength,
-      }),
+      messages,
     }),
     signal,
   });
@@ -90,9 +100,243 @@ async function callClaude(messages: Message[], options?: AgentOptions, signal?: 
   return (await response.json()) as ClaudeResponse;
 }
 
+async function callClaudeStreaming(
+  messages: Message[],
+  options?: AgentOptions,
+  signal?: AbortSignal
+): Promise<Response> {
+  const model = options?.model || config.claudeModel;
+
+  const response = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.claudeToken}`,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "user-agent": "claude-cli/2.1.85",
+      "x-app": "cli",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: MAX_TOKENS,
+      system: buildSystemPrompt(options),
+      tools: getToolDefinitions(),
+      messages,
+      stream: true,
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Claude API error ${response.status}: ${body}`);
+  }
+
+  return response;
+}
+
+async function* parseSSEStream(
+  response: Response,
+  signal?: AbortSignal
+): AsyncGenerator<StreamEvent> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      if (signal?.aborted) throw new Error("Task cancelled");
+
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by double newlines
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop()!; // Keep the incomplete last part in the buffer
+
+      for (const part of parts) {
+        const lines = part.split("\n");
+        let eventData = "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            eventData += line.slice(6);
+          }
+        }
+
+        if (eventData && eventData.trim()) {
+          try {
+            const parsed = JSON.parse(eventData) as StreamEvent;
+            yield parsed;
+          } catch {
+            console.warn("[stream] Failed to parse SSE event:", eventData.slice(0, 200));
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export interface AgentResult {
   messages: Message[];
   inputTokens: number;
+}
+
+export interface StreamingCallbacks {
+  /** Called with each new text chunk as it arrives */
+  onTextDelta: (delta: string, accumulatedText: string) => void;
+  /** Called when tool execution starts */
+  onToolStart?: (toolName: string) => void;
+  /** Called when tool execution finishes */
+  onToolEnd?: (toolName: string) => void;
+}
+
+export async function runAgentStreaming(
+  messages: Message[],
+  callbacks: StreamingCallbacks,
+  options?: AgentOptions,
+  signal?: AbortSignal
+): Promise<AgentResult> {
+  const conversation = sanitizeMessages([...messages]);
+  const newMessages: Message[] = [];
+  let lastInputTokens = 0;
+  let fullAccumulatedText = "";
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (signal?.aborted) throw new Error("Task cancelled");
+
+    const response = await callClaudeStreaming(conversation, options, signal);
+
+    // Track accumulated content blocks in original order
+    const contentBlocks: ContentBlock[] = [];
+    const toolUseBlocks: ToolUseBlock[] = []; // also tracked separately for tool execution
+    let stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" = "end_turn";
+    let currentBlockType: "text" | "tool_use" | null = null;
+    let currentTextBlockText = "";
+    let currentToolUseId = "";
+    let currentToolUseName = "";
+    let currentToolUseInput = "";
+
+    // Parse the SSE stream
+    for await (const event of parseSSEStream(response, signal)) {
+      if (event.type === "message_start") {
+        lastInputTokens = event.message.usage?.input_tokens ?? lastInputTokens;
+      } else if (event.type === "content_block_start") {
+        if (event.content_block.type === "text") {
+          currentBlockType = "text";
+          currentTextBlockText = "";
+        } else if (event.content_block.type === "tool_use") {
+          currentBlockType = "tool_use";
+          currentToolUseId = event.content_block.id;
+          currentToolUseName = event.content_block.name;
+          currentToolUseInput = ""; // May remain empty if tool has no params — handled at block_stop
+        }
+      } else if (event.type === "content_block_delta") {
+        if (event.delta.type === "text_delta") {
+          const delta = event.delta.text;
+          currentTextBlockText += delta;
+          fullAccumulatedText += delta;
+          callbacks.onTextDelta(delta, fullAccumulatedText);
+        } else if (event.delta.type === "input_json_delta") {
+          currentToolUseInput += event.delta.partial_json;
+        }
+      } else if (event.type === "content_block_stop") {
+        // Finalize the content block based on tracked type
+        if (currentBlockType === "text") {
+          const block: TextBlock = { type: "text", text: currentTextBlockText };
+          contentBlocks.push(block);
+          currentTextBlockText = "";
+        } else if (currentBlockType === "tool_use") {
+          try {
+            // If no input_json_delta events were received (tool with no params),
+            // default to empty object to avoid JSON.parse("") throwing
+            const input = JSON.parse(currentToolUseInput || "{}") as Record<string, unknown>;
+            const block: ToolUseBlock = {
+              type: "tool_use",
+              id: currentToolUseId,
+              name: currentToolUseName,
+              input,
+            };
+            contentBlocks.push(block);
+            toolUseBlocks.push(block);
+          } catch (e) {
+            console.warn(`[stream] Failed to parse tool input for ${currentToolUseId}:`, e);
+          }
+          currentToolUseId = "";
+          currentToolUseName = "";
+          currentToolUseInput = "";
+        }
+        currentBlockType = null;
+      } else if (event.type === "message_delta") {
+        stopReason = event.delta.stop_reason;
+      }
+    }
+
+    // Build the assistant message preserving original block order
+    const content: ContentBlock[] = contentBlocks;
+    const assistantMessage: Message = {
+      role: "assistant",
+      content,
+    };
+    conversation.push(assistantMessage);
+    newMessages.push(assistantMessage);
+
+    if (stopReason !== "tool_use") {
+      break;
+    }
+
+    // Execute tool calls
+    if (signal?.aborted) throw new Error("Task cancelled");
+
+    if (toolUseBlocks.length > 0) {
+      callbacks.onToolStart?.(toolUseBlocks.map((b) => b.name).join(", "));
+
+      const toolResults: ToolResultBlock[] = await Promise.all(
+        toolUseBlocks.map(async (block) => {
+          if (signal?.aborted) {
+            return {
+              type: "tool_result" as const,
+              tool_use_id: block.id,
+              content: "Task cancelled",
+              is_error: true,
+            };
+          }
+
+          console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
+          const { result, isError } = await executeTool(
+            block.name,
+            block.input as Record<string, unknown>
+          );
+          return {
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: result.slice(0, 50_000), // cap tool output
+            is_error: isError,
+          };
+        })
+      );
+
+      callbacks.onToolEnd?.(toolUseBlocks.map((b) => b.name).join(", "));
+
+      if (signal?.aborted) throw new Error("Task cancelled");
+
+      const toolResultMessage: Message = {
+        role: "user",
+        content: toolResults,
+      };
+      conversation.push(toolResultMessage);
+      newMessages.push(toolResultMessage);
+    }
+  }
+
+  return { messages: newMessages, inputTokens: lastInputTokens };
 }
 
 /**
@@ -103,7 +347,7 @@ export interface AgentResult {
  * This can happen when:
  * - loadHistory's LIMIT cuts mid tool-call pair
  * - compaction splits between a tool_use and its tool_result
- * - async event triggers a new main-agent turn with stale history
+ * - async event triggers a new Lin turn with stale history
  */
 function sanitizeMessages(messages: Message[]): Message[] {
   const result: Message[] = [];
@@ -178,10 +422,9 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
     if (signal?.aborted) throw new Error("Task cancelled");
 
     const response = await callClaude(conversation, options, signal);
-    logUsage("main-agent", response.usage);
 
-    // Track total processed input so compaction still reflects cached prefixes.
-    lastInputTokens = getTotalInputTokens(response.usage) || lastInputTokens;
+    // Track the latest input_tokens from the API response
+    lastInputTokens = response.usage?.input_tokens ?? lastInputTokens;
 
     const assistantMessage: Message = {
       role: "assistant",

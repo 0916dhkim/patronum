@@ -1,8 +1,9 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages } from "./session.js";
-import { initThread, appendToThread } from "./thread.js";
-import { runAgent, extractTextFromResponse, type AgentResult } from "./agent.js";
+import { initThread, appendToThread, loadThread, formatThreadForContext } from "./thread.js";
+import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
+import { DraftStreamer } from "./draft-stream.js";
 import { runAgentWithSnapshot } from "./run-agent.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
@@ -20,6 +21,7 @@ const TELEGRAM_MSG_LIMIT = 4096;
 
 type ChatEvent =
   | { type: "user_message"; text: string; ctx: import("telegraf").Context }
+  | { type: "user_photo"; caption: string; imageBase64: string; mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; ctx: import("telegraf").Context }
   | { type: "agent_completion"; taskId: string; agent: string; result: string }
   | { type: "agent_failure"; taskId: string; agent: string; error: string };
 
@@ -105,18 +107,6 @@ async function sendMessageSafe(
   }
 }
 
-function buildRecallAugmentedMessage(message: Message, recallContext: string): Message {
-  if (message.role !== "user") return message;
-
-  return {
-    role: "user",
-    content: [
-      { type: "text", text: typeof message.content === "string" ? message.content : JSON.stringify(message.content) },
-      { type: "text", text: recallContext },
-    ],
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Main bot setup
 // ---------------------------------------------------------------------------
@@ -131,7 +121,7 @@ export function startBot(): void {
     initMemoryStore();
     console.log(`[patronum] Memory system initialized (${getChunkCount()} chunks indexed)`);
   } else {
-    console.warn("[patronum] credentials.voyage_api_key not set in patronum.toml — memory system disabled");
+    console.warn("[patronum] VOYAGE_API_KEY not set — memory system disabled");
   }
 
   const bot = new Telegraf(config.telegramBotToken, {
@@ -149,7 +139,7 @@ export function startBot(): void {
 
     // Fire-and-forget: run the agent in background
     runAgentWithSnapshot(
-      agentTask.agentDef,
+      agentName,
       chatId,
       task,
       agentTask.threadSnapshot,
@@ -159,7 +149,7 @@ export function startBot(): void {
         taskManager.complete(taskId, result);
 
         // Append result to the live thread
-        appendToThread(chatId, agentName, result);
+        appendToThread(chatId, agentName as "alex" | "iris" | "quill", result);
 
         console.log(`[spawn] ${agentName} (${taskId}) completed (${result.length} chars)`);
 
@@ -176,7 +166,7 @@ export function startBot(): void {
       .catch((err) => {
         const errorMsg = err instanceof Error ? err.message : String(err);
 
-        // Don't treat cancellation as a failure that needs reporting to the main agent
+        // Don't treat cancellation as a failure that needs reporting to Lin
         if (errorMsg === "Task cancelled") {
           console.log(`[spawn] ${agentName} (${taskId}) cancelled`);
           // taskManager.cancel already set the status
@@ -278,6 +268,58 @@ export function startBot(): void {
     const state = getChatState(chatId);
     state.queue.push({ type: "user_message", text: userText, ctx });
     processQueue(chatId, bot);
+  });
+
+  // Photo handler: download image, convert to base64, enqueue
+  // -------------------------------------------------------------------
+  bot.on("photo", async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    const msgTime = ctx.message.date;
+
+    if (msgTime < BOT_START_TIME - 5) {
+      console.log(`[msg] dropped stale photo (age=${BOT_START_TIME - msgTime}s)`);
+      return;
+    }
+
+    const caption = ctx.message.caption || "[Image]";
+    console.log(`[msg] chat=${chatId}: photo (caption: ${caption.slice(0, 100)})`);
+
+    setCurrentChatId(chatId);
+    setSendMediaChatId(chatId);
+
+    // Take the largest photo size (last in array)
+    const photos = ctx.message.photo;
+    const largest = photos[photos.length - 1];
+
+    try {
+      const fileLink = await ctx.telegram.getFileLink(largest.file_id);
+      const response = await fetch(fileLink.href);
+
+      if (!response.ok) {
+        console.error(`[photo] Failed to download image: ${response.status}`);
+        await ctx.reply("Failed to download image.");
+        return;
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const imageBase64 = buffer.toString("base64");
+
+      // Infer MIME type from URL, default to jpeg
+      const url = fileLink.href.toLowerCase();
+      let mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" = "image/jpeg";
+      if (url.includes(".png")) mediaType = "image/png";
+      else if (url.includes(".gif")) mediaType = "image/gif";
+      else if (url.includes(".webp")) mediaType = "image/webp";
+
+      appendToThread(chatId, "user", caption);
+
+      const state = getChatState(chatId);
+      state.queue.push({ type: "user_photo", caption, imageBase64, mediaType, ctx });
+      processQueue(chatId, bot);
+    } catch (err) {
+      console.error(`[photo] Error processing photo:`, err);
+      try { await ctx.reply("Failed to process image."); } catch { /* ignore */ }
+    }
   });
 
   bot.launch({ allowedUpdates: ["message"] });
@@ -396,17 +438,60 @@ async function handleEvent(
 
   try {
 
-  // Load session history
-  const history = loadHistory(chatId);
-  const completedPrefixLength = history.length;
+  // Build extra context based on event type
+  let extraContext: string[] = [];
 
-  // For user messages, add to session history
+  if (event.type === "agent_completion") {
+    const notification = [
+      `[Background Task Completed]`,
+      `Agent: ${event.agent} (task ${event.taskId})`,
+      `Result:`,
+      event.result.slice(0, 5000), // cap what Lin sees in the notification (full result is in thread)
+    ].join("\n");
+    extraContext = [notification];
+  } else if (event.type === "agent_failure") {
+    const notification = [
+      `[Background Task Failed]`,
+      `Agent: ${event.agent} (task ${event.taskId})`,
+      `Error: ${event.error}`,
+    ].join("\n");
+    extraContext = [notification];
+  }
+
+  // Load session history and thread
+  const history = loadHistory(chatId);
+
+  // For user messages (text or photo), add to session history
   if (event.type === "user_message") {
     const userMessage: Message = { role: "user", content: event.text };
     history.push(userMessage);
     saveMessage(chatId, userMessage);
+  } else if (event.type === "user_photo") {
+    // Build vision message with image + caption for Claude
+    const visionMessage: Message = {
+      role: "user",
+      content: [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: event.mediaType,
+            data: event.imageBase64,
+          },
+        },
+        {
+          type: "text",
+          text: event.caption,
+        },
+      ],
+    };
+    // Push full vision message (with image) to in-memory history for this turn
+    history.push(visionMessage);
+    // Save only caption text to SQLite — don't persist image bytes
+    const storageMessage: Message = { role: "user", content: event.caption };
+    saveMessage(chatId, storageMessage);
   } else {
-    // For agent events, inject a synthetic user message so the main agent can respond
+    // For agent events, inject a synthetic user message so Lin can respond
     const systemText =
       event.type === "agent_completion"
         ? `[system] Background task completed: ${event.agent} (${event.taskId})\nResult: ${event.result.slice(0, 2000)}`
@@ -417,33 +502,49 @@ async function handleEvent(
     saveMessage(chatId, syntheticMessage);
   }
 
-  const agentHistory = [...history];
+  // Load thread context
+  const thread = loadThread(chatId);
+  const threadContext = formatThreadForContext(thread);
 
-  // Auto-recall: attach relevant past context to the current user turn only.
-  if (config.voyageApiKey && event.type === "user_message") {
+  // Auto-recall: find relevant past context for user messages
+  if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
     try {
-      const recallContext = await autoRecall(event.text);
+      const queryText = event.type === "user_message" ? event.text : event.caption;
+      const recallContext = await autoRecall(queryText);
       if (recallContext) {
-        const currentMessage = agentHistory[agentHistory.length - 1];
-        if (currentMessage) {
-          agentHistory[agentHistory.length - 1] = buildRecallAugmentedMessage(
-            currentMessage,
-            recallContext
-          );
-          console.log(`[bot] Auto-recall attached to current turn for chat=${chatId}`);
-        }
+        extraContext.push(recallContext);
+        console.log(`[bot] Auto-recall injected context for chat=${chatId}`);
       }
     } catch (err) {
       console.error(`[bot] Auto-recall failed (continuing):`, err);
     }
   }
 
-  // Run the main agent
-  const agentResult = await runAgent(agentHistory, {
-    model: config.claudeModel,
-    workspace: config.workspace,
-    completedPrefixLength,
-  });
+  // Run Lin with streaming responses
+  const draftStreamer = new DraftStreamer(bot, chatId);
+
+  const agentResult = await runAgentStreaming(
+    history,
+    {
+      onTextDelta: (_delta: string, fullText: string) => {
+        draftStreamer.update(fullText);
+      },
+      onToolStart: (toolName: string) => {
+        console.log(`[stream] Tool starting: ${toolName}`);
+      },
+      onToolEnd: (toolName: string) => {
+        console.log(`[stream] Tool completed: ${toolName}`);
+      },
+    },
+    {
+      model: config.claudeModel,
+      workspace: config.workspace,
+      extraContext: [threadContext, ...extraContext],
+    }
+  );
+
+  // Stop the draft streamer before sending the final message
+  draftStreamer.stop();
 
   const { messages: newMessages, inputTokens } = agentResult;
 
@@ -473,13 +574,14 @@ async function handleEvent(
   // Extract reply text
   const reply = extractTextFromResponse(newMessages);
 
-  // Append the main agent's response to the shared thread
+  // Append Lin's response to the shared thread
   appendToThread(chatId, "main", reply);
 
   // Post-turn: index this exchange into vector memory
-  if (config.voyageApiKey && event.type === "user_message") {
+  if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
     // Fire-and-forget — don't block the reply
-    indexExchange(chatId, event.text, newMessages).catch((err) => {
+    const exchangeText = event.type === "user_message" ? event.text : event.caption;
+    indexExchange(chatId, exchangeText, newMessages).catch((err) => {
       console.error(`[bot] Failed to index exchange:`, err);
     });
   }
