@@ -40,13 +40,11 @@ function buildAgents(): Record<string, AgentDef> {
   const agentsDir = path.join(config.workspace, "agents");
   const agents: Record<string, AgentDef> = {};
 
-  // Lin always exists — it's the main agent, not discovered from SUBAGENT.md
+  // Lin always exists — uses workspace root directly (not agents/lin/)
   agents.lin = {
     name: "lin",
     model: config.claudeModel,
-    workspaceDir: existsSync(path.join(agentsDir, "lin"))
-      ? path.join(agentsDir, "lin")
-      : config.workspace,
+    workspaceDir: config.workspace,
     description: "Main orchestrator agent",
     systemPrompt: "",
   };
