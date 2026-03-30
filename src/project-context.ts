@@ -34,7 +34,6 @@ ${sourceDir}/
 │   ├── agents.ts         — Dynamic workspace subagent loader
 │   ├── run-agent.ts      — Run agent with thread snapshot
 │   ├── task-manager.ts   — Background task tracking
-│   ├── secrets.ts        — Secret Party integration
 │   ├── memory/
 │   │   ├── embeddings.ts — Voyage AI embedding client
 │   │   ├── store.ts      — sqlite-vec vector storage + search
