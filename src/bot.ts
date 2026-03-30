@@ -202,6 +202,15 @@ export function startBot(): void {
   });
 
   // -------------------------------------------------------------------
+  // Register bot commands with Telegram (shows in "/" autocomplete menu)
+  // -------------------------------------------------------------------
+  bot.telegram.setMyCommands([
+    { command: "status", description: "Show bot status" },
+  ]).catch((err) => {
+    console.error("[patronum] Failed to register bot commands:", err);
+  });
+
+  // -------------------------------------------------------------------
   // Status command handler
   // -------------------------------------------------------------------
   bot.command("status", async (ctx) => {
