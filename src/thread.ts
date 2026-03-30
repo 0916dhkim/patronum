@@ -7,7 +7,7 @@ import { config } from "./config.js";
 
 export interface ThreadMessage {
   id: string;
-  author: "user" | "lin" | "alex" | "iris" | "quill" | "system";
+  author: "user" | "main" | "alex" | "iris" | "quill" | "system";
   content: string;
   timestamp: number;
   chatId: string;

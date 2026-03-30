@@ -127,7 +127,7 @@ export function startBot(): void {
     handlerTimeout: Infinity,
   });
   setBot(bot);
-  const linAgent = AGENTS.lin;
+  const mainAgent = AGENTS.main;
   const BOT_START_TIME = Math.floor(Date.now() / 1000);
 
   // -------------------------------------------------------------------
@@ -161,7 +161,7 @@ export function startBot(): void {
           agent: agentName,
           result,
         });
-        processQueue(chatId, bot, linAgent);
+        processQueue(chatId, bot, mainAgent);
       })
       .catch((err) => {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -187,7 +187,7 @@ export function startBot(): void {
           agent: agentName,
           error: errorMsg,
         });
-        processQueue(chatId, bot, linAgent);
+        processQueue(chatId, bot, mainAgent);
       });
   });
 
@@ -216,7 +216,7 @@ export function startBot(): void {
     // Enqueue and process
     const state = getChatState(chatId);
     state.queue.push({ type: "user_message", text: userText, ctx });
-    processQueue(chatId, bot, linAgent);
+    processQueue(chatId, bot, mainAgent);
   });
 
   bot.launch({ allowedUpdates: ["message"] });
@@ -248,7 +248,7 @@ export function startBot(): void {
           result: resumeText,
         };
         state.queue.push(syntheticEvent);
-        processQueue(restartState.chatId, bot, linAgent);
+        processQueue(restartState.chatId, bot, mainAgent);
       }, 2000); // small delay to let Telegram settle
     }
   } else if (config.ownerChatId) {
@@ -290,7 +290,7 @@ export function startBot(): void {
 async function processQueue(
   chatId: string,
   bot: Telegraf,
-  linAgent: { model: string; workspaceDir: string }
+  mainAgent: { model: string; workspaceDir: string }
 ): Promise<void> {
   const state = getChatState(chatId);
 
@@ -304,7 +304,7 @@ async function processQueue(
       const event = state.queue.shift()!;
 
       try {
-        await handleEvent(event, chatId, bot, linAgent);
+        await handleEvent(event, chatId, bot, mainAgent);
       } catch (err) {
         console.error(`[processQueue] Error handling event in chat=${chatId}:`, err);
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -326,7 +326,7 @@ async function handleEvent(
   event: ChatEvent,
   chatId: string,
   bot: Telegraf,
-  linAgent: { model: string; workspaceDir: string }
+  mainAgent: { model: string; workspaceDir: string }
 ): Promise<void> {
   // Ensure tools point to correct chat
   setCurrentChatId(chatId);
@@ -396,8 +396,8 @@ async function handleEvent(
 
   // Run Lin
   const agentResult = await runAgent(history, {
-    model: linAgent.model,
-    workspace: linAgent.workspaceDir,
+    model: mainAgent.model,
+    workspace: mainAgent.workspaceDir,
     extraContext: [threadContext, ...extraContext],
   });
 
@@ -409,7 +409,7 @@ async function handleEvent(
   }
 
   // Token-based compaction
-  const model = linAgent.model;
+  const model = mainAgent.model;
   const fullHistory = [...history, ...newMessages];
   const { messages: compactedHistory, compacted } = await compactIfNeeded(
     fullHistory,
@@ -430,7 +430,7 @@ async function handleEvent(
   const reply = extractTextFromResponse(newMessages);
 
   // Append Lin's response to the shared thread
-  appendToThread(chatId, "lin", reply);
+  appendToThread(chatId, "main", reply);
 
   // Post-turn: index this exchange into vector memory
   if (config.voyageApiKey && event.type === "user_message") {

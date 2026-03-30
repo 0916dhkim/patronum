@@ -41,8 +41,8 @@ function buildAgents(): Record<string, AgentDef> {
   const agents: Record<string, AgentDef> = {};
 
   // Lin always exists — uses workspace root directly (not agents/lin/)
-  agents.lin = {
-    name: "lin",
+  agents.main = {
+    name: "main",
     model: config.claudeModel,
     workspaceDir: config.workspace,
     description: "Main orchestrator agent",
@@ -53,7 +53,7 @@ function buildAgents(): Record<string, AgentDef> {
 
   for (const entry of readdirSync(agentsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    if (entry.name === "lin") continue; // lin is hardcoded above
+    if (entry.name === "main") continue; // lin is hardcoded above
     const agentDir = path.join(agentsDir, entry.name);
     const subagentPath = path.join(agentDir, "SUBAGENT.md");
 
@@ -111,7 +111,7 @@ export function buildSubagentsSummary(): string {
   if (!_agents) _agents = buildAgents();
 
   // Exclude lin itself
-  const subagents = Object.values(_agents).filter((a) => a.name !== "lin");
+  const subagents = Object.values(_agents).filter((a) => a.name !== "main");
   if (subagents.length === 0) return "";
 
   const lines = subagents.map((a) => `- **${a.name}**: ${a.description}`);

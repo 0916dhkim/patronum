@@ -115,7 +115,7 @@ export async function runAgentInThread(
   // Optionally append the task/prompt to the thread
   if (userPrompt) {
     // The task briefing from lin goes to thread as lin's message
-    appendToThread(chatId, "lin", userPrompt);
+    appendToThread(chatId, "main", userPrompt);
   }
 
   // Load thread and format as context
