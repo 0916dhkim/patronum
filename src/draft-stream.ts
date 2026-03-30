@@ -21,8 +21,11 @@ export class DraftStreamer {
     private bot: Telegraf,
     private chatId: string | number
   ) {
-    // Use a random positive integer as draft_id (Telegram requires non-zero)
-    this.draftId = Math.floor(Math.random() * 2147483647) + 1;
+    // Use a stable draft_id derived from the chat ID so Telegram always
+    // updates the same draft bubble across turns (avoids "Deleted message" artifacts).
+    // Must be a positive 32-bit integer.
+    const id = typeof chatId === "string" ? parseInt(chatId, 10) : chatId;
+    this.draftId = Math.abs(id % 2147483647) || 1;
   }
 
   /**
