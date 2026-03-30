@@ -38,15 +38,8 @@ function buildSkills(): Record<string, SkillDef> {
   return skills;
 }
 
-let _skills: Record<string, SkillDef> | null = null;
-
-export function resetSkillsCache(): void {
-  _skills = null;
-}
-
 function getSkills(): Record<string, SkillDef> {
-  if (!_skills) _skills = buildSkills();
-  return _skills;
+  return buildSkills();
 }
 
 export function loadSkills(): Record<string, SkillDef> {
