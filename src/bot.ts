@@ -41,6 +41,25 @@ function getChatState(chatId: string): ChatState {
 }
 
 // ---------------------------------------------------------------------------
+// Typing keepalive
+// ---------------------------------------------------------------------------
+
+const TYPING_INTERVAL_MS = 4000; // Telegram typing indicator lasts ~5s, refresh every 4s
+
+function startTypingIndicator(bot: Telegraf, chatId: string): () => void {
+  // Fire immediately
+  bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
+
+  // Then keep refreshing until stopped
+  const timer = setInterval(() => {
+    bot.telegram.sendChatAction(chatId, "typing").catch(() => {});
+  }, TYPING_INTERVAL_MS);
+
+  // Return a stop function
+  return () => clearInterval(timer);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -313,12 +332,10 @@ async function handleEvent(
   setCurrentChatId(chatId);
   setSendMediaChatId(chatId);
 
-  // Show typing indicator
+  // Show typing indicator — keepalive loop so it persists for long turns
+  const stopTyping = startTypingIndicator(bot, chatId);
+
   try {
-    await bot.telegram.sendChatAction(chatId, "typing");
-  } catch {
-    // Non-critical
-  }
 
   // Build extra context based on event type
   let extraContext: string[] = [];
@@ -427,5 +444,9 @@ async function handleEvent(
   const chunks = splitMessage(reply);
   for (const chunk of chunks) {
     await sendMessageSafe(bot, chatId, chunk);
+  }
+
+  } finally {
+    stopTyping();
   }
 }

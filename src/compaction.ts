@@ -17,7 +17,7 @@ const contextWindowCache = new Map<string, number>();
 const FALLBACK_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-4-6": 200_000,
   "claude-opus-4-6": 200_000,
-  "claude-haiku-3-5-20241022": 200_000,
+  "claude-3-5-haiku-20241022": 200_000,
   "claude-sonnet-4-20250514": 200_000,
 };
 
@@ -97,7 +97,7 @@ async function summarizeMessages(messages: Message[]): Promise<string> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-haiku-3-5-20241022",
+      model: "claude-3-5-haiku-20241022",
       max_tokens: 2048,
       system: "You are a precise summarizer. Summarize the conversation transcript below into a compact but complete summary. Preserve all key facts, decisions, code changes, and context that would be needed to continue the conversation. Be concise but thorough. Output only the summary, no preamble.",
       messages: [
