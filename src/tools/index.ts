@@ -9,6 +9,7 @@ import { cancelAgentTool } from "./cancel-agent.js";
 import { listTasksTool } from "./list-tasks.js";
 import { memorySearchTool, memoryWriteTool } from "../memory/index.js";
 import { selfRestartTool } from "./self-restart.js";
+import { searchTool } from "./search.js";
 
 export { setCurrentChatId, getCurrentChatId } from "./chat-context.js";
 export { setBot, setSendMediaChatId };
@@ -26,6 +27,7 @@ const tools: ToolHandler[] = [
   memorySearchTool,
   memoryWriteTool,
   selfRestartTool,
+  searchTool,
 ];
 
 const toolMap = new Map<string, ToolHandler>(
