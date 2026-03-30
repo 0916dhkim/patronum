@@ -100,6 +100,15 @@ function decryptToString(cipherString: string | null, encKey: Buffer, macKey: Bu
   }
 }
 
+function encryptToString(plaintext: string, encKey: Buffer, macKey: Buffer): string {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-cbc", encKey, iv);
+  const ct = Buffer.concat([cipher.update(Buffer.from(plaintext, "utf8")), cipher.final()]);
+  const macData = Buffer.concat([iv, ct]);
+  const mac = crypto.createHmac("sha256", macKey).update(macData).digest();
+  return "2." + iv.toString("base64") + "|" + ct.toString("base64") + "|" + mac.toString("base64");
+}
+
 // --- VaultSession class ---
 
 class VaultSession {
@@ -109,6 +118,7 @@ class VaultSession {
   private userMacKey: Buffer | null = null;
   private privateKeyDer: Buffer | null = null;
   private orgKeys: Map<string, OrgKeys> = new Map();
+  private orgCollectionIds: Map<string, string> = new Map(); // orgId → first collectionId
   private cachedCiphers: VaultCipher[] | null = null;
   private cacheTime: number = 0;
   private static readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -211,6 +221,7 @@ class VaultSession {
         privateKey: string;
         organizations: Array<{ id: string; key: string }>;
       };
+      collections: Array<{ id: string; organizationId: string }>;
     };
 
     // Decrypt user's RSA private key (needed to unwrap org keys)
@@ -239,6 +250,16 @@ class VaultSession {
           this.orgKeys.set(org.id, { encKey: orgKeyBuf.subarray(0, 32), macKey: orgKeyBuf.subarray(32, 64) });
         } catch {
           // Skip orgs we can't decrypt
+        }
+      }
+    }
+
+    // Store first collection ID per org (needed for creating items)
+    this.orgCollectionIds.clear();
+    if (data.collections) {
+      for (const col of data.collections) {
+        if (col.organizationId && !this.orgCollectionIds.has(col.organizationId)) {
+          this.orgCollectionIds.set(col.organizationId, col.id);
         }
       }
     }
@@ -297,6 +318,72 @@ class VaultSession {
     return item;
   }
 
+  async createItem(params: {
+    name: string;
+    username?: string;
+    password?: string;
+    url?: string;
+    notes?: string;
+    orgId?: string;
+  }): Promise<string> {
+    // Ensure vault is loaded (loads org keys and collection IDs)
+    await this.getItems();
+
+    // Pick the org — use specified orgId or first available
+    let orgId = params.orgId;
+    if (!orgId) {
+      const firstOrgId = this.orgKeys.keys().next().value as string | undefined;
+      if (!firstOrgId) throw new Error("No organization available. Cannot create org-owned items without an org.");
+      orgId = firstOrgId;
+    }
+
+    const orgKey = this.orgKeys.get(orgId);
+    if (!orgKey) throw new Error(`No decryption key for org "${orgId}".`);
+
+    const collectionId = this.orgCollectionIds.get(orgId);
+    if (!collectionId) throw new Error(`No collection found for org "${orgId}". Create a collection first in Vaultwarden.`);
+
+    const { encKey, macKey } = orgKey;
+
+    const payload = {
+      type: 1,
+      name: encryptToString(params.name, encKey, macKey),
+      organizationId: orgId,
+      collectionIds: [collectionId],
+      login: {
+        username: params.username ? encryptToString(params.username, encKey, macKey) : null,
+        password: params.password ? encryptToString(params.password, encKey, macKey) : null,
+        uris: params.url ? [{ uri: encryptToString(params.url, encKey, macKey), match: null }] : null,
+        totp: null,
+      },
+      notes: params.notes ? encryptToString(params.notes, encKey, macKey) : null,
+      favorite: false,
+      reprompt: 0,
+      fields: [],
+    };
+
+    const baseUrl = config.vaultwardenUrl.replace(/\/$/, "");
+    const res = await fetch(`${baseUrl}/api/ciphers`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.accessToken}`,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Failed to create item: ${res.status} ${text}`);
+    }
+
+    // Invalidate cache so next list/get reflects the new item
+    this.cachedCiphers = null;
+
+    return params.name;
+  }
+
   invalidate(): void {
     this.accessToken = null;
     this.tokenExpiry = 0;
@@ -304,6 +391,7 @@ class VaultSession {
     this.userMacKey = null;
     this.privateKeyDer = null;
     this.orgKeys.clear();
+    this.orgCollectionIds.clear();
     this.cachedCiphers = null;
     this.retrying401 = false;
   }
@@ -319,19 +407,38 @@ export const vaultwardenTool: ToolHandler = {
     description:
       "Access secrets from the Vaultwarden password vault. " +
       "Use 'list' to see all items, 'get' to retrieve a specific item's credentials, " +
-      "or 'search' to find items by name.",
+      "'search' to find items by name, or 'create' to add a new login item.",
     input_schema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["list", "get", "search"],
+          enum: ["list", "get", "search", "create"],
           description: "Action to perform",
         },
         query: {
           type: "string",
-          description:
-            "For 'get': exact name or ID of the item. For 'search': keyword to match against item names.",
+          description: "For 'get': exact name or ID of the item. For 'search': keyword to match against item names.",
+        },
+        name: {
+          type: "string",
+          description: "For 'create': name of the new item (required).",
+        },
+        username: {
+          type: "string",
+          description: "For 'create': login username (optional).",
+        },
+        password: {
+          type: "string",
+          description: "For 'create': login password (optional).",
+        },
+        url: {
+          type: "string",
+          description: "For 'create': login URL (optional).",
+        },
+        notes: {
+          type: "string",
+          description: "For 'create': notes (optional).",
         },
       },
       required: ["action"],
@@ -386,8 +493,21 @@ export const vaultwardenTool: ToolHandler = {
           return `Found ${matches.length} item(s):\n${lines.join("\n")}`;
         }
 
+        case "create": {
+          const name = input.name as string | undefined;
+          if (!name) return "Error: 'name' parameter required for 'create' action.";
+          const created = await session.createItem({
+            name,
+            username: input.username as string | undefined,
+            password: input.password as string | undefined,
+            url: input.url as string | undefined,
+            notes: input.notes as string | undefined,
+          });
+          return `Created item: ${created}`;
+        }
+
         default:
-          return `Unknown action: "${action}". Use "list", "get", or "search".`;
+          return `Unknown action: "${action}". Use "list", "get", "search", or "create".`;
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
