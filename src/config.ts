@@ -22,35 +22,21 @@ export const config: Config = {
 };
 
 export async function initConfig(): Promise<void> {
-  // Workspace is always the directory containing patronum.toml
-  // Search upward from cwd, or use WORKSPACE env var as override
   const workspace = findWorkspace();
   config.workspace = workspace;
 
-  const tomlPath = path.join(workspace, "patronum.toml");
-  if (!existsSync(tomlPath)) {
-    throw new Error(`patronum.toml not found at ${tomlPath}`);
-  }
+  const { tomlPath, data } = loadPatronumToml(workspace);
+  const patronum = getOptionalTable(data, "patronum", tomlPath) ?? {};
+  const credentials = getRequiredTable(data, "credentials", tomlPath);
 
-  const raw = readFileSync(tomlPath, "utf-8");
-  const toml = parse(raw) as Record<string, unknown>;
-
-  const patronum = (toml.patronum ?? {}) as Record<string, unknown>;
-  const credentials = (toml.credentials ?? {}) as Record<string, unknown>;
-
-  config.claudeModel = str(patronum.model) || "claude-sonnet-4-6";
-  config.ownerChatId = str(patronum.owner_chat_id) || "";
-
-  config.claudeToken = str(credentials.claude_token) || requireEnv("CLAUDE_TOKEN");
-  config.telegramBotToken = str(credentials.telegram_bot_token) || requireEnv("TELEGRAM_BOT_TOKEN");
-  config.voyageApiKey = str(credentials.voyage_api_key) || process.env.VOYAGE_API_KEY || "";
+  config.claudeModel = getOptionalString(patronum, "patronum.model", "model", tomlPath) ?? "claude-sonnet-4-6";
+  config.ownerChatId = getOptionalString(patronum, "patronum.owner_chat_id", "owner_chat_id", tomlPath) ?? "";
+  config.claudeToken = getRequiredString(credentials, "credentials.claude_token", "claude_token", tomlPath);
+  config.telegramBotToken = getRequiredString(credentials, "credentials.telegram_bot_token", "telegram_bot_token", tomlPath);
+  config.voyageApiKey = getOptionalString(credentials, "credentials.voyage_api_key", "voyage_api_key", tomlPath) ?? "";
 }
 
 function findWorkspace(): string {
-  // Allow explicit override via env var
-  if (process.env.WORKSPACE) return process.env.WORKSPACE;
-
-  // Walk upward from cwd looking for patronum.toml
   let dir = process.cwd();
   for (let i = 0; i < 10; i++) {
     if (existsSync(path.join(dir, "patronum.toml"))) return dir;
@@ -63,25 +49,104 @@ function findWorkspace(): string {
   return process.cwd();
 }
 
-function str(val: unknown): string {
-  return typeof val === "string" ? val : "";
+function loadPatronumToml(workspace: string): {
+  tomlPath: string;
+  data: Record<string, unknown>;
+} {
+  const tomlPath = path.join(workspace, "patronum.toml");
+  if (!existsSync(tomlPath)) {
+    throw new Error(`Missing required config file: ${tomlPath}`);
+  }
+
+  const raw = readFileSync(tomlPath, "utf-8");
+
+  try {
+    const parsed = parse(raw);
+    if (!isRecord(parsed)) {
+      throw new Error(`Invalid config root in ${tomlPath}: expected table`);
+    }
+    return { tomlPath, data: parsed };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse ${tomlPath}: ${message}`);
+  }
 }
 
-function requireEnv(key: string): string {
-  const value = process.env[key];
-  if (!value) {
-    throw new Error(`Missing required config: ${key} (not in patronum.toml and not in environment)`);
+function getRequiredTable(
+  root: Record<string, unknown>,
+  key: string,
+  tomlPath: string,
+): Record<string, unknown> {
+  if (!(key in root)) {
+    throw new Error(`Missing required config section: ${key} in ${tomlPath}`);
   }
+
+  const value = root[key];
+  if (!isRecord(value)) {
+    throw new Error(`Invalid config at ${key} in ${tomlPath}: expected table`);
+  }
+
   return value;
+}
+
+function getOptionalTable(
+  root: Record<string, unknown>,
+  key: string,
+  tomlPath: string,
+): Record<string, unknown> | undefined {
+  if (!(key in root)) return undefined;
+
+  const value = root[key];
+  if (!isRecord(value)) {
+    throw new Error(`Invalid config at ${key} in ${tomlPath}: expected table`);
+  }
+
+  return value;
+}
+
+function getRequiredString(
+  table: Record<string, unknown>,
+  pathKey: string,
+  key: string,
+  tomlPath: string,
+): string {
+  if (!(key in table)) {
+    throw new Error(`Missing required config: ${pathKey} in ${tomlPath}`);
+  }
+
+  return getValidatedString(table[key], pathKey, tomlPath);
+}
+
+function getOptionalString(
+  table: Record<string, unknown>,
+  pathKey: string,
+  key: string,
+  tomlPath: string,
+): string | undefined {
+  if (!(key in table)) return undefined;
+
+  return getValidatedString(table[key], pathKey, tomlPath);
+}
+
+function getValidatedString(value: unknown, pathKey: string, tomlPath: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`Invalid config at ${pathKey} in ${tomlPath}: expected string`);
+  }
+
+  if (value.trim() === "") {
+    throw new Error(`Invalid config at ${pathKey} in ${tomlPath}: value must not be empty`);
+  }
+
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // Export agent overrides so agents.ts can use them
 export function getAgentOverrides(): Record<string, { model?: string }> {
   const workspace = config.workspace || findWorkspace();
-  const tomlPath = path.join(workspace, "patronum.toml");
-  if (!existsSync(tomlPath)) return {};
-
-  const raw = readFileSync(tomlPath, "utf-8");
-  const toml = parse(raw) as Record<string, unknown>;
-  return ((toml.agents ?? {}) as Record<string, { model?: string }>);
+  const { tomlPath, data } = loadPatronumToml(workspace);
+  return (getOptionalTable(data, "agents", tomlPath) ?? {}) as Record<string, { model?: string }>;
 }

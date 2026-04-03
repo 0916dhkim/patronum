@@ -1,11 +1,10 @@
 /**
  * One-time migration: copy messages, archived_messages, and thread_messages
  * from the repo DB into the workspace DB so everything lives in one place.
- * 
+ *
  * Run: npx tsx scripts/migrate-db.ts
  */
 
-import "dotenv/config";
 import Database from "better-sqlite3";
 import path from "path";
 import { initConfig, config } from "../src/config.js";

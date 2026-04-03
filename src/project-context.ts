@@ -22,7 +22,7 @@ ${sourceDir}/
 │   ├── index.ts          — Entry point
 │   ├── bot.ts            — Telegram bot, message handling, event queue
 │   ├── agent.ts          — Claude API calls, system prompt, tool loop
-│   ├── config.ts         — Environment config (loaded from .env)
+│   ├── config.ts         — TOML config loader and validation
 │   ├── session.ts        — SQLite message history (per-chat)
 │   ├── thread.ts         — Shared thread context across agents
 │   ├── compaction.ts     — Token-based context compaction
@@ -58,11 +58,11 @@ ${sourceDir}/
 
 Workspace root: ${config.workspace}
 ├── source/         — Git repo (above)
+├── patronum.toml   — Required runtime config and credentials
 ├── SOUL.md         — Your personality (user-editable)
 ├── AGENTS.md       — Your rules and preferences (user-editable)
 ├── MEMORY.md       — Curated persistent facts (you can edit this)
 ├── patronum.db     — SQLite database (messages, memory, threads)
-└── .env            — Environment config (tokens, model)
 
 ## Self-Editing Workflow
 
@@ -78,6 +78,7 @@ Workspace root: ${config.workspace}
 - **Auto-recall** — every user message is embedded and top matches from history are injected into context
 - **Post-turn indexing** — each exchange is embedded and stored for future recall
 - **Compaction** — at 70% context window, older messages are summarized
+- **TOML config** — runtime config lives in patronum.toml in the workspace root
 - **OAuth auth** — uses Claude OAuth bearer tokens with Claude Code identity header
 `;
 }

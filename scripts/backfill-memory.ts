@@ -3,7 +3,6 @@
  * Run once: npx tsx scripts/backfill-memory.ts
  */
 
-import "dotenv/config";
 import Database from "better-sqlite3";
 import path from "path";
 import { initConfig, config } from "../src/config.js";
@@ -22,7 +21,7 @@ async function main() {
   await initConfig();
 
   if (!config.voyageApiKey) {
-    console.error("VOYAGE_API_KEY not set");
+    console.error("Missing config: credentials.voyage_api_key in patronum.toml");
     process.exit(1);
   }
 
@@ -34,28 +33,8 @@ async function main() {
     console.log(`Already have ${existingCount} chunks. Continuing from where we left off.`);
   }
 
-  // The messages DB might be at config.workspace or the repo dir (if WORKSPACE was changed after initial use).
-  // Check both, prefer wherever messages actually live.
   const workspaceDbPath = path.join(config.workspace, "patronum.db");
-  const repoDbPath = path.resolve(import.meta.dirname, "..", "patronum.db");
-
-  let dbPath = workspaceDbPath;
-  for (const candidate of [workspaceDbPath, repoDbPath]) {
-    try {
-      const testDb = new Database(candidate, { readonly: true });
-      const row = testDb.prepare("SELECT COUNT(*) as c FROM messages").get() as { c: number };
-      testDb.close();
-      if (row.c > 0) {
-        dbPath = candidate;
-        console.log(`Found ${row.c} messages at ${candidate}`);
-        break;
-      }
-    } catch {
-      // table doesn't exist or db doesn't exist — try next
-    }
-  }
-
-  const db = new Database(dbPath, { readonly: true });
+  const db = new Database(workspaceDbPath, { readonly: true });
 
   // Load all messages ordered by id
   const rows = db

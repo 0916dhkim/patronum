@@ -9,7 +9,6 @@ WorkingDirectory=/opt/patronum
 ExecStart=/usr/bin/node /opt/patronum/source/dist/index.js
 Restart=always
 RestartSec=5
-EnvironmentFile=/opt/patronum/.env
 StandardOutput=journal
 StandardError=journal
 

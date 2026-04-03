@@ -48,7 +48,6 @@ WorkingDirectory=${WORKSPACE_DIR}
 ExecStart=/usr/bin/node ${WORKSPACE_DIR}/source/dist/index.js
 Restart=always
 RestartSec=5
-EnvironmentFile=${WORKSPACE_DIR}/.env
 StandardOutput=journal
 StandardError=journal
 
@@ -61,6 +60,6 @@ systemctl enable patronum
 
 echo ""
 echo "==> Installed! Next steps:"
-echo "    1. Create ${WORKSPACE_DIR}/.env with your tokens"
+echo "    1. Create ${WORKSPACE_DIR}/patronum.toml with your config and credentials"
 echo "    2. systemctl start patronum"
 echo "    3. journalctl -u patronum -f"

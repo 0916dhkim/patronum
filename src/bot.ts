@@ -120,7 +120,7 @@ export function startBot(): void {
     initMemoryStore();
     console.log(`[patronum] Memory system initialized (${getChunkCount()} chunks indexed)`);
   } else {
-    console.warn("[patronum] VOYAGE_API_KEY not set — memory system disabled");
+    console.warn("[patronum] credentials.voyage_api_key not set in patronum.toml — memory system disabled");
   }
 
   const bot = new Telegraf(config.telegramBotToken, {
