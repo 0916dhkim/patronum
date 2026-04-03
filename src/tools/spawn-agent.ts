@@ -1,4 +1,5 @@
 import type { ToolHandler } from "../types.js";
+import { getAgentsDir, getSubagentSetupHint, listAgentDefs } from "../agents.js";
 import { taskManager } from "../task-manager.js";
 import { loadThread } from "../thread.js";
 import { getCurrentChatId } from "./chat-context.js";
@@ -20,8 +21,7 @@ export const spawnAgentTool: ToolHandler = {
       properties: {
         agent: {
           type: "string",
-          enum: ["alex", "iris", "quill"],
-          description: "Which specialist agent to spawn",
+          description: "Which workspace-defined specialist agent to spawn",
         },
         task: {
           type: "string",
@@ -41,8 +41,15 @@ export const spawnAgentTool: ToolHandler = {
       return "Error: No chat context available for agent invocation";
     }
 
-    if (!["alex", "iris", "quill"].includes(agentName)) {
-      return `Error: Unknown agent "${agentName}". Available: alex, iris, quill`;
+    const agentDefs = listAgentDefs();
+    if (agentDefs.length === 0) {
+      return `Error: No subagents configured in ${getAgentsDir()}. ${getSubagentSetupHint()}`;
+    }
+
+    const agentDef = agentDefs.find((agent) => agent.name === agentName);
+    if (!agentDef) {
+      const agentNames = agentDefs.map((agent) => agent.name);
+      return `Error: Unknown agent "${agentName}". Available: ${agentNames.join(", ")}`;
     }
 
     if (!spawnCallback) {
@@ -53,7 +60,7 @@ export const spawnAgentTool: ToolHandler = {
     const threadSnapshot = loadThread(chatId);
 
     // Register task in TaskManager
-    const agentTask = taskManager.spawn(agentName, task, chatId, threadSnapshot);
+    const agentTask = taskManager.spawn(agentDef, task, chatId, threadSnapshot);
 
     console.log(`[spawn_agent] Spawned ${agentName} as task ${agentTask.taskId}: ${task.slice(0, 100)}`);
 

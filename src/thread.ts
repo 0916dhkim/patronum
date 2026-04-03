@@ -3,11 +3,11 @@ import path from "path";
 import crypto from "node:crypto";
 import { config } from "./config.js";
 
-
+export type ThreadAuthor = "user" | "main" | "system" | (string & {});
 
 export interface ThreadMessage {
   id: string;
-  author: "user" | "main" | "alex" | "iris" | "quill" | "system";
+  author: ThreadAuthor;
   content: string;
   timestamp: number;
   chatId: string;
@@ -77,5 +77,4 @@ export function formatThreadForContext(thread: ThreadMessage[]): string {
   const lines = thread.map((m) => `[${m.author}] ${m.content}`);
   return `[Conversation Thread]\n${lines.join("\n")}`;
 }
-
 

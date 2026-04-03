@@ -16,6 +16,11 @@ interface SubagentFrontmatter {
   model?: string;
 }
 
+interface ParsedSubagent {
+  definition: AgentDef;
+  sourcePath: string;
+}
+
 /**
  * Parse YAML-style frontmatter from a markdown file.
  * Returns { frontmatter, body }.
@@ -36,11 +41,20 @@ function parseFrontmatter(content: string): { frontmatter: SubagentFrontmatter; 
   return { frontmatter, body: match[2].trim() };
 }
 
-function buildAgents(): Record<string, AgentDef> {
-  const agentsDir = path.join(config.workspace, "agents");
-  const agents: Record<string, AgentDef> = {};
+export function getAgentsDir(): string {
+  return path.join(config.workspace, "agents");
+}
 
-  if (!existsSync(agentsDir)) return agents;
+export function getSubagentSetupHint(): string {
+  const agentsDir = getAgentsDir();
+  return `Create ${agentsDir}/<name>/SUBAGENT.md with frontmatter like: --- name: reviewer description: Reviews code changes model: ${config.claudeModel} ---`;
+}
+
+function loadAgentFiles(): ParsedSubagent[] {
+  const agentsDir = getAgentsDir();
+  const parsed: ParsedSubagent[] = [];
+
+  if (!existsSync(agentsDir)) return parsed;
 
   for (const entry of readdirSync(agentsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -50,59 +64,85 @@ function buildAgents(): Record<string, AgentDef> {
 
     if (!existsSync(subagentPath)) continue;
 
-    const raw = readFileSync(subagentPath, "utf-8");
+    let raw: string;
+    try {
+      raw = readFileSync(subagentPath, "utf-8");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[agents] Failed to read ${subagentPath}: ${message} — skipping`);
+      continue;
+    }
+
     const { frontmatter, body } = parseFrontmatter(raw);
 
     const name = frontmatter.name || entry.name;
     const description = frontmatter.description;
 
     if (!description) {
-      console.warn(`[agents] ${name}/SUBAGENT.md is missing required 'description' frontmatter — skipping`);
+      console.warn(`[agents] ${subagentPath} is missing required 'description' frontmatter — skipping`);
       continue;
     }
 
-    agents[name] = {
-      name,
-      model: frontmatter.model || config.claudeModel,
-      workspaceDir: agentDir,
-      description,
-      systemPrompt: body,
-    };
+    parsed.push({
+      sourcePath: subagentPath,
+      definition: {
+        name,
+        model: frontmatter.model || config.claudeModel,
+        workspaceDir: agentDir,
+        description,
+        systemPrompt: body,
+      },
+    });
   }
 
+  return parsed;
+}
+
+export function listAgentDefs(): AgentDef[] {
+  const parsed = loadAgentFiles();
+  const duplicateNames = new Set<string>();
+  const unique = new Map<string, ParsedSubagent>();
+
+  for (const entry of parsed) {
+    const existing = unique.get(entry.definition.name);
+    if (existing) {
+      duplicateNames.add(entry.definition.name);
+      console.warn(
+        `[agents] Duplicate subagent name "${entry.definition.name}" in ${existing.sourcePath} and ${entry.sourcePath} — excluding both`,
+      );
+      unique.delete(entry.definition.name);
+      continue;
+    }
+
+    if (duplicateNames.has(entry.definition.name)) {
+      console.warn(
+        `[agents] Duplicate subagent name "${entry.definition.name}" in ${entry.sourcePath} — excluding`,
+      );
+      continue;
+    }
+
+    unique.set(entry.definition.name, entry);
+  }
+
+  const agents = Array.from(unique.values()).map((entry) => entry.definition);
+  agents.sort((a, b) => a.name.localeCompare(b.name));
   return agents;
 }
 
-// Lazy init — accessed after config is loaded
-let _agents: Record<string, AgentDef> | null = null;
+export function listAgentNames(): string[] {
+  return listAgentDefs().map((agent) => agent.name);
+}
 
-export const AGENTS = new Proxy({} as Record<string, AgentDef>, {
-  get(_target, prop: string) {
-    if (!_agents) _agents = buildAgents();
-    return _agents[prop];
-  },
-  ownKeys() {
-    if (!_agents) _agents = buildAgents();
-    return Object.keys(_agents);
-  },
-  getOwnPropertyDescriptor(_target, prop: string) {
-    if (!_agents) _agents = buildAgents();
-    if (prop in _agents) {
-      return { configurable: true, enumerable: true, value: _agents[prop] };
-    }
-    return undefined;
-  },
-});
+export function getAgentDef(name: string): AgentDef | undefined {
+  return listAgentDefs().find((agent) => agent.name === name);
+}
 
 /**
  * Build a subagents summary block for injection into Lin's system prompt.
  * Lists each subagent name + description so Lin can route intelligently.
  */
 export function buildSubagentsSummary(): string {
-  if (!_agents) _agents = buildAgents();
-
-  // Exclude lin itself
-  const subagents = Object.values(_agents);
+  const subagents = listAgentDefs();
   if (subagents.length === 0) return "";
 
   const lines = subagents.map((a) => `- **${a.name}**: ${a.description}`);

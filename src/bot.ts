@@ -8,7 +8,6 @@ import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
 import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
-import { AGENTS } from "./agents.js";
 import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
 import type { Message } from "./types.js";
@@ -138,7 +137,7 @@ export function startBot(): void {
 
     // Fire-and-forget: run the agent in background
     runAgentWithSnapshot(
-      agentName,
+      agentTask.agentDef,
       chatId,
       task,
       agentTask.threadSnapshot,
@@ -148,7 +147,7 @@ export function startBot(): void {
         taskManager.complete(taskId, result);
 
         // Append result to the live thread
-        appendToThread(chatId, agentName as "alex" | "iris" | "quill", result);
+        appendToThread(chatId, agentName, result);
 
         console.log(`[spawn] ${agentName} (${taskId}) completed (${result.length} chars)`);
 

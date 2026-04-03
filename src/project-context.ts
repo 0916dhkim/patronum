@@ -31,7 +31,7 @@ ${sourceDir}/
 │   ├── project-context.ts — This file (project self-knowledge)
 │   ├── format.ts         — Markdown → Telegram HTML conversion
 │   ├── types.ts          — TypeScript types for Claude API
-│   ├── agents.ts         — Agent definitions (lin, alex, iris, quill)
+│   ├── agents.ts         — Dynamic workspace subagent loader
 │   ├── run-agent.ts      — Run agent with thread snapshot
 │   ├── task-manager.ts   — Background task tracking
 │   ├── secrets.ts        — Secret Party integration
@@ -59,6 +59,8 @@ ${sourceDir}/
 Workspace root: ${config.workspace}
 ├── source/         — Git repo (above)
 ├── patronum.toml   — Required runtime config and credentials
+├── agents/         — Optional workspace-defined subagents
+│   └── <name>/SUBAGENT.md
 ├── SOUL.md         — Your personality (user-editable)
 ├── AGENTS.md       — Your rules and preferences (user-editable)
 ├── MEMORY.md       — Curated persistent facts (you can edit this)
@@ -78,6 +80,7 @@ Workspace root: ${config.workspace}
 - **Auto-recall** — every user message is embedded and top matches from history are injected into context
 - **Post-turn indexing** — each exchange is embedded and stored for future recall
 - **Compaction** — at 70% context window, older messages are summarized
+- **Dynamic subagents** — optional workspace agents are loaded from agents/*/SUBAGENT.md on demand
 - **TOML config** — runtime config lives in patronum.toml in the workspace root
 - **OAuth auth** — uses Claude OAuth bearer tokens with Claude Code identity header
 `;

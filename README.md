@@ -64,6 +64,7 @@ Startup fails fast if the file is missing, a required section/key is missing, a 
 my-workspace/
 ├── source/           # Cloned repo (TypeScript source)
 ├── patronum.toml     # Required runtime config and credentials
+├── agents/           # Optional workspace-defined subagents
 ├── SOUL.md           # Bot personality (auto-created from template if missing)
 ├── AGENTS.md         # Bot rules and preferences (auto-created if missing)
 ├── MEMORY.md         # Persistent facts (created by the bot)
@@ -76,7 +77,7 @@ my-workspace/
 - **Vector memory** — Voyage AI embeddings + sqlite-vec for semantic recall over past conversations
 - **Auto-recall** — relevant past context automatically injected on each message
 - **Self-editing** — the bot can read, edit, and rebuild its own source code
-- **Multi-agent** — spawn background agent tasks with different models
+- **Dynamic subagents** — spawn background specialist agents defined in your workspace
 - **Tools** — exec, read, write, edit, send media, memory search/write, self-restart
 
 ## Tools Available
@@ -86,12 +87,45 @@ my-workspace/
 - `write` — create/overwrite files
 - `edit` — find and replace in files
 - `send_media` — send images/files via Telegram
-- `spawn_agent` — run background agent tasks
+- `spawn_agent` — run a configured workspace subagent in the background
 - `cancel_agent` — cancel running tasks
 - `list_tasks` — list active background tasks
 - `memory_search` — semantic search over past conversations and curated facts
 - `memory_write` — save facts to MEMORY.md + vector index
 - `self_restart` — rebuild and restart (use after code changes)
+
+## Subagents
+
+Subagents are optional and live in the workspace, not in the repo. Patronum loads them from `agents/<folder>/SUBAGENT.md` each time it needs to list or spawn them, so changes take effect without restarting.
+
+Example:
+
+```text
+my-workspace/
+├── agents/
+│   └── reviewer/
+│       └── SUBAGENT.md
+```
+
+```md
+---
+name: reviewer
+description: Reviews code changes for bugs and regressions
+model: claude-sonnet-4-6
+---
+
+You are a careful code review specialist.
+Focus on bugs, regressions, and missing tests.
+```
+
+Rules:
+
+- `description` is required
+- `name` is optional; if omitted, the folder name becomes the spawn name
+- `model` is optional; if omitted, Patronum uses the main configured model
+- Agent names must be unique after loading
+
+If no subagents are configured, Patronum still starts, but `spawn_agent` returns a setup error that points to the expected workspace path and file format.
 
 ## Development
 

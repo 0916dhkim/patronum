@@ -20,6 +20,9 @@ export const DEFAULT_AGENTS = `\
 - read: read file contents
 - write: create or overwrite files
 - edit: find and replace in files
+- spawn_agent: run a configured workspace subagent in the background
+- cancel_agent: cancel a background subagent task
+- list_tasks: inspect active and recent background subagent tasks
 - memory_search: search past conversations and curated facts
 - memory_write: save important facts to MEMORY.md
 - self_restart: rebuild and restart after code changes
@@ -28,5 +31,6 @@ export const DEFAULT_AGENTS = `\
 - Be resourceful before asking — try to figure things out first
 - When running commands, prefer quick one-liners over long scripts
 - Keep responses short unless depth is needed
+- Only use spawn_agent after the workspace has agents/<name>/SUBAGENT.md files configured
 - You can edit your own source code — see project context for details
 `;

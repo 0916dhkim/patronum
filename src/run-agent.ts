@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { AGENTS } from "./agents.js";
+import { getAgentDef, type AgentDef } from "./agents.js";
 import { loadThread, appendToThread, formatThreadForContext } from "./thread.js";
 import type { ThreadMessage } from "./thread.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
@@ -16,12 +16,9 @@ const MAX_TOKENS = 8192;
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 function buildAgentSystemPrompt(
-  agentName: string,
+  agent: AgentDef,
   threadContext: string
 ): Array<{ type: "text"; text: string }> {
-  const agent = AGENTS[agentName];
-  if (!agent) throw new Error(`Unknown agent: ${agentName}`);
-
   const system: Array<{ type: "text"; text: string }> = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
@@ -40,14 +37,11 @@ function buildAgentSystemPrompt(
 }
 
 async function callClaudeForAgent(
-  agentName: string,
+  agent: AgentDef,
   messages: Message[],
   systemPrompt: Array<{ type: "text"; text: string }>,
   signal?: AbortSignal
 ): Promise<ClaudeResponse> {
-  const agent = AGENTS[agentName];
-  if (!agent) throw new Error(`Unknown agent: ${agentName}`);
-
   // Agents get tools too — they can read/write/exec
   const tools = getToolDefinitions();
 
@@ -75,7 +69,7 @@ async function callClaudeForAgent(
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Claude API error ${response.status} for agent ${agentName}: ${body}`);
+    throw new Error(`Claude API error ${response.status} for agent ${agent.name}: ${body}`);
   }
 
   return (await response.json()) as ClaudeResponse;
@@ -106,7 +100,7 @@ export async function runAgentInThread(
   userPrompt?: string,
   signal?: AbortSignal
 ): Promise<string> {
-  const agent = AGENTS[agentName];
+  const agent = getAgentDef(agentName);
   if (!agent) throw new Error(`Unknown agent: ${agentName}`);
 
   // Check abort before starting
@@ -123,7 +117,7 @@ export async function runAgentInThread(
   const threadContext = formatThreadForContext(thread);
 
   // Build system prompt with agent identity + thread context
-  const systemPrompt = buildAgentSystemPrompt(agentName, threadContext);
+  const systemPrompt = buildAgentSystemPrompt(agent, threadContext);
 
   // The agent sees the task as a user message in its conversation
   const taskMessage = userPrompt || "Please review the conversation thread and provide your input.";
@@ -139,7 +133,7 @@ export async function runAgentInThread(
     // Check abort before each API call
     if (signal?.aborted) throw new Error("Task cancelled");
 
-    const response = await callClaudeForAgent(agentName, messages, systemPrompt, signal);
+    const response = await callClaudeForAgent(agent, messages, systemPrompt, signal);
 
     const assistantMessage: Message = {
       role: "assistant",
@@ -199,7 +193,7 @@ export async function runAgentInThread(
   // Extract final text and append to thread
   const finalText = extractFinalText(lastAssistantContent);
   if (finalText) {
-    appendToThread(chatId, agentName as "alex" | "iris" | "quill", finalText);
+    appendToThread(chatId, agentName, finalText);
   }
 
   return finalText || "(no response from agent)";
@@ -210,22 +204,19 @@ export async function runAgentInThread(
  * Does NOT append to the live thread — the caller (task-manager flow) handles that.
  */
 export async function runAgentWithSnapshot(
-  agentName: string,
+  agent: AgentDef,
   chatId: string,
   userPrompt: string,
   threadSnapshot: ThreadMessage[],
   signal?: AbortSignal
 ): Promise<string> {
-  const agent = AGENTS[agentName];
-  if (!agent) throw new Error(`Unknown agent: ${agentName}`);
-
   if (signal?.aborted) throw new Error("Task cancelled");
 
   // Format snapshot as context (not the live thread)
   const threadContext = formatThreadForContext(threadSnapshot);
 
   // Build system prompt with agent identity + snapshot context
-  const systemPrompt = buildAgentSystemPrompt(agentName, threadContext);
+  const systemPrompt = buildAgentSystemPrompt(agent, threadContext);
 
   const messages: Message[] = [
     { role: "user", content: userPrompt },
@@ -236,7 +227,7 @@ export async function runAgentWithSnapshot(
   while (true) {
     if (signal?.aborted) throw new Error("Task cancelled");
 
-    const response = await callClaudeForAgent(agentName, messages, systemPrompt, signal);
+    const response = await callClaudeForAgent(agent, messages, systemPrompt, signal);
 
     const assistantMessage: Message = {
       role: "assistant",
@@ -266,7 +257,7 @@ export async function runAgentWithSnapshot(
           };
         }
 
-        console.log(`[agent:${agentName}:tool] ${block.name}(${JSON.stringify(block.input)})`);
+        console.log(`[agent:${agent.name}:tool] ${block.name}(${JSON.stringify(block.input)})`);
         const { result, isError } = await executeTool(
           block.name,
           block.input as Record<string, unknown>

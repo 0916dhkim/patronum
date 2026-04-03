@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
+import type { AgentDef } from "./agents.js";
 import type { ThreadMessage } from "./thread.js";
 
 export interface AgentTask {
   taskId: string;
   agent: string;
+  agentDef: AgentDef;
   task: string;
   chatId: string;
   status: "running" | "done" | "cancelled" | "failed";
@@ -28,7 +30,7 @@ export class TaskManager {
    * Register a new task. Does NOT start execution — caller handles that.
    */
   spawn(
-    agent: string,
+    agentDef: AgentDef,
     task: string,
     chatId: string,
     threadSnapshot: ThreadMessage[]
@@ -38,7 +40,8 @@ export class TaskManager {
 
     const agentTask: AgentTask = {
       taskId,
-      agent,
+      agent: agentDef.name,
+      agentDef,
       task,
       chatId,
       status: "running",
