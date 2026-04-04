@@ -3,12 +3,36 @@ import type { Message, ContentBlock } from "./types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MODELS_API_URL = "https://api.anthropic.com/v1/models";
+const COMPACTION_MODEL = "claude-haiku-4-5-20251001";
 
 // Compaction triggers at 70% of the model's context window
 const COMPACTION_RATIO = 0.70;
 
 // Keep last ~20 messages verbatim during compaction
 const KEEP_RECENT_COUNT = 20;
+const MAX_TEXT_SNIPPET_CHARS = 800;
+const MAX_TOOL_INPUT_CHARS = 400;
+const MAX_TOOL_RESULT_CHARS = 400;
+
+const COMPACTION_SYSTEM_PROMPT = `You compact long-running agent conversations into a continuation-safe state summary.
+
+Summarize the provided transcript into structured markdown using exactly these sections, in this order:
+
+## Current Objective
+## Important Context
+## Decisions Made
+## Open Issues
+## Active Files And Components
+## Pending Next Steps
+
+Requirements:
+- Preserve the active goal, relevant user preferences, important facts, decisions, unresolved questions, and pending work.
+- Preserve meaningful tool outcomes, errors, and any tool result that changed the direction of the work.
+- Mention concrete files, functions, components, or external identifiers when they are still relevant.
+- Prefer explicit unknowns over guesses.
+- Be concise, but do not omit continuation-critical context.
+- Use bullets where helpful inside sections.
+- Output only the markdown summary.`;
 
 // Cache: model id → context_window size
 const contextWindowCache = new Map<string, number>();
@@ -68,15 +92,47 @@ export async function getContextWindow(model: string): Promise<number> {
 function messageToText(msg: Message): string {
   const role = msg.role.toUpperCase();
   if (typeof msg.content === "string") {
-    return `${role}: ${msg.content}`;
+    return [`### ${role} MESSAGE`, truncateText(msg.content, MAX_TEXT_SNIPPET_CHARS)].join("\n");
   }
-  const parts: string[] = [];
+
+  const parts: string[] = [`### ${role} MESSAGE`];
   for (const block of msg.content) {
-    if (block.type === "text") parts.push(block.text);
-    else if (block.type === "tool_use") parts.push(`[Tool: ${block.name}(${JSON.stringify(block.input)})]`);
-    else if (block.type === "tool_result") parts.push(`[Tool result: ${block.content.slice(0, 500)}]`);
+    if (block.type === "text") {
+      const text = normalizeWhitespace(block.text);
+      if (text) parts.push(`- Text: ${truncateText(text, MAX_TEXT_SNIPPET_CHARS)}`);
+      continue;
+    }
+
+    if (block.type === "tool_use") {
+      parts.push(
+        `- Tool call: ${block.name}(${truncateText(safeJson(block.input), MAX_TOOL_INPUT_CHARS)})`
+      );
+      continue;
+    }
+
+    const status = block.is_error ? "error" : "ok";
+    parts.push(
+      `- Tool result (${status}): ${truncateText(normalizeWhitespace(block.content), MAX_TOOL_RESULT_CHARS)}`
+    );
   }
-  return `${role}: ${parts.join(" ")}`;
+  return parts.join("\n");
+}
+
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 3)}...`;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable input]";
+  }
 }
 
 /**
@@ -97,13 +153,13 @@ async function summarizeMessages(messages: Message[]): Promise<string> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
+      model: COMPACTION_MODEL,
       max_tokens: 2048,
-      system: "You are a precise summarizer. Summarize the conversation transcript below into a compact but complete summary. Preserve all key facts, decisions, code changes, and context that would be needed to continue the conversation. Be concise but thorough. Output only the summary, no preamble.",
+      system: COMPACTION_SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
-          content: `Please summarize this conversation transcript:\n\n${transcript}`,
+          content: `Summarize this earlier conversation transcript for future continuation:\n\n${transcript}`,
         },
       ],
     }),
@@ -140,7 +196,8 @@ export async function compactIfNeeded(
   console.log(`[compaction] Threshold reached (${(ratio * 100).toFixed(1)}% >= ${COMPACTION_RATIO * 100}%) — compacting...`);
 
   // Split: summarize older messages, keep recent ones verbatim
-  let splitIndex = Math.max(0, messages.length - KEEP_RECENT_COUNT);
+  const initialSplitIndex = Math.max(0, messages.length - KEEP_RECENT_COUNT);
+  let splitIndex = initialSplitIndex;
 
   // Adjust split point to avoid breaking tool_use/tool_result pairs.
   // If the message right after the split is a user message with tool_results,
@@ -176,6 +233,10 @@ export async function compactIfNeeded(
     console.warn(`[compaction] Dropping leading tool_result message from toKeep to avoid orphan`);
     toKeep = toKeep.slice(1);
   }
+
+  console.log(
+    `[compaction] Split at index ${splitIndex} (initial=${initialSplitIndex}, summarized=${toSummarize.length}, kept=${toKeep.length})`
+  );
 
   const summary = await summarizeMessages(toSummarize);
 
