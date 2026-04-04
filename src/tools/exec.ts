@@ -24,6 +24,20 @@ export const execTool: ToolHandler = {
   async execute(input): Promise<string> {
     const command = input.command as string;
 
+    // Blocklist patterns to prevent bypassing self_restart
+    const blocklist: RegExp[] = [
+      /\bsystemctl\s+(stop|start|restart|reload|kill)\s+.*\bpatronum\b/i,
+      /\bservice\s+patronum\s+(stop|start|restart)\b/i,
+      /\bpkill\s+.*\b(node|patronum)\b/i,
+    ];
+
+    // Check if command matches any blocklist pattern
+    for (const pattern of blocklist) {
+      if (pattern.test(command)) {
+        return `Blocked: "${command}" would affect the Patronum process directly. Use the self_restart tool to rebuild and restart safely.`;
+      }
+    }
+
     return new Promise((resolve) => {
       cpExec(
         command,
