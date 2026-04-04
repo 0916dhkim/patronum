@@ -371,8 +371,12 @@ export async function startBot(): Promise<void> {
       launchAttempts++;
       lastError = err as Error;
       if (launchAttempts < maxAttempts) {
-        const waitMs = Math.min(1000 * Math.pow(2, launchAttempts - 1), 60000);
-        console.warn(`[patronum] Launch failed (attempt ${launchAttempts}/${maxAttempts}), retrying in ${waitMs}ms: ${lastError.message}`);
+        const waitMs = Math.min(1500 * Math.pow(2, launchAttempts - 1), 60000);
+        if (lastError.message.includes("409")) {
+          console.warn(`[patronum] 409 conflict on launch (attempt ${launchAttempts}/${maxAttempts}) — waiting ${waitMs}ms for Telegram session to release`);
+        } else {
+          console.warn(`[patronum] Launch failed (attempt ${launchAttempts}/${maxAttempts}), retrying in ${waitMs}ms: ${lastError.message}`);
+        }
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
     }
