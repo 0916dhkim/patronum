@@ -8,6 +8,7 @@ import {
   prepareMessagesForClaude,
   prepareSystemPromptForClaude,
   logUsage,
+  getTotalInputTokens,
 } from "./prompt-cache.js";
 
 import type {
@@ -241,7 +242,7 @@ export async function runAgentStreaming(
     // Parse the SSE stream
     for await (const event of parseSSEStream(response, signal)) {
       if (event.type === "message_start") {
-        lastInputTokens = event.message.usage?.input_tokens ?? lastInputTokens;
+        lastInputTokens = getTotalInputTokens(event.message.usage) || lastInputTokens;
         logUsage("lin", event.message.usage);
       } else if (event.type === "content_block_start") {
         if (event.content_block.type === "text") {
@@ -440,7 +441,7 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
     const response = await callClaude(conversation, options, signal, initialLength);
 
     // Track the latest input_tokens from the API response
-    lastInputTokens = response.usage?.input_tokens ?? lastInputTokens;
+    lastInputTokens = getTotalInputTokens(response.usage) || lastInputTokens;
     logUsage("lin", response.usage);
 
     const assistantMessage: Message = {

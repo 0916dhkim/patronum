@@ -37,8 +37,13 @@ json.dump({
   echo "[restart] Resume state written"
 fi
 
-# Step 3: Restart
-echo "[restart] Restarting patronum..."
-sudo systemctl restart patronum
+# Step 3: Restart — stop first, wait for full shutdown, then start
+# The pause avoids a 409 Conflict race where the old process is still
+# polling getUpdates when the new one comes up.
+echo "[restart] Stopping patronum..."
+sudo systemctl stop patronum
+sleep 3
+echo "[restart] Starting patronum..."
+sudo systemctl start patronum
 
 echo "[restart] Done"

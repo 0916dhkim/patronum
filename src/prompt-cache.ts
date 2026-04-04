@@ -38,12 +38,8 @@ function setBreakpointOnMessage(message: PreparedMessage): PreparedMessage {
     }
   }
 
-  content.push({
-    type: "text",
-    text: "",
-    cache_control: { type: "ephemeral" },
-  });
-
+  // Don't create empty text blocks with cache_control — Claude API rejects them
+  // If there are no text blocks, just return the message as-is
   return { role: message.role, content };
 }
 

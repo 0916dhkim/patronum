@@ -112,7 +112,7 @@ async function sendMessageSafe(
 // Main bot setup
 // ---------------------------------------------------------------------------
 
-export function startBot(): void {
+export async function startBot(): Promise<void> {
   initSession();
   initThread();
 
@@ -328,7 +328,35 @@ export function startBot(): void {
     }
   });
 
-  bot.launch({ allowedUpdates: ["message"] });
+  // Launch with retry — Telegram sometimes holds polling sessions for 30-60s
+  let launchAttempts = 0;
+  const maxAttempts = 5;
+  let lastError: Error | null = null;
+
+  while (launchAttempts < maxAttempts) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        bot.launch({ allowedUpdates: ["message"] })
+          .then(() => resolve())
+          .catch(reject);
+      });
+      break; // Success
+    } catch (err) {
+      launchAttempts++;
+      lastError = err as Error;
+      if (launchAttempts < maxAttempts) {
+        const waitMs = Math.min(1000 * Math.pow(2, launchAttempts - 1), 60000);
+        console.warn(`[patronum] Launch failed (attempt ${launchAttempts}/${maxAttempts}), retrying in ${waitMs}ms: ${lastError.message}`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+  }
+
+  if (launchAttempts >= maxAttempts) {
+    console.error(`[patronum] Failed to launch after ${maxAttempts} attempts:`, lastError);
+    process.exit(1);
+  }
+
   console.log("[patronum] Bot started (async multi-agent mode)");
 
   // Check for restart resume state
