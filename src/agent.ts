@@ -3,13 +3,19 @@ import { loadContextFile } from "./context.js";
 import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import { buildSubagentsSummary } from "./agents.js";
+import {
+  getTotalInputTokens,
+  logUsage,
+  prepareMessagesForClaude,
+  prepareSystemPromptForClaude,
+} from "./prompt-cache.js";
 
 import type {
   Message,
   ClaudeResponse,
-  ContentBlock,
   ToolUseBlock,
   ToolResultBlock,
+  TextBlock,
 } from "./types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
@@ -23,14 +29,14 @@ export interface AgentOptions {
   model?: string;
   /** Override workspace for loading SOUL.md/AGENTS.md */
   workspace?: string;
-  /** Additional system context blocks (e.g. thread context) */
-  extraContext?: string[];
+  /** Number of leading messages that belong to completed prior turns */
+  completedPrefixLength?: number;
 }
 
-function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
+function buildSystemPrompt(options?: AgentOptions): TextBlock[] {
   const workspace = options?.workspace || config.workspace;
 
-  const system: Array<{ type: "text"; text: string }> = [
+  const system: TextBlock[] = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
   const soul = loadContextFile(workspace, "SOUL.md");
@@ -46,13 +52,6 @@ function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: 
   // Inject available subagents summary for routing decisions
   const subagentsSummary = buildSubagentsSummary();
   if (subagentsSummary) system.push({ type: "text", text: subagentsSummary });
-
-  // Append any extra context (thread, etc.)
-  if (options?.extraContext) {
-    for (const ctx of options.extraContext) {
-      if (ctx) system.push({ type: "text", text: ctx });
-    }
-  }
 
   return system;
 }
@@ -74,9 +73,11 @@ async function callClaude(messages: Message[], options?: AgentOptions, signal?: 
     body: JSON.stringify({
       model,
       max_tokens: MAX_TOKENS,
-      system: buildSystemPrompt(options),
+      system: prepareSystemPromptForClaude(buildSystemPrompt(options)),
       tools: getToolDefinitions(),
-      messages,
+      messages: prepareMessagesForClaude(messages, {
+        completedPrefixLength: options?.completedPrefixLength,
+      }),
     }),
     signal,
   });
@@ -177,9 +178,10 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
     if (signal?.aborted) throw new Error("Task cancelled");
 
     const response = await callClaude(conversation, options, signal);
+    logUsage("lin", response.usage);
 
-    // Track the latest input_tokens from the API response
-    lastInputTokens = response.usage?.input_tokens ?? lastInputTokens;
+    // Track total processed input so compaction still reflects cached prefixes.
+    lastInputTokens = getTotalInputTokens(response.usage) || lastInputTokens;
 
     const assistantMessage: Message = {
       role: "assistant",

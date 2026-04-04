@@ -12,7 +12,7 @@ const AUTO_RECALL_TOP_K = 6;
 
 /**
  * Auto-recall: given the user's message, find relevant past context.
- * Returns a formatted string to inject into system prompt, or null if nothing found.
+ * Returns a formatted string to attach to the current turn, or null if nothing found.
  */
 export async function autoRecall(userText: string): Promise<string | null> {
   try {

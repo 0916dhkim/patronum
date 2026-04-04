@@ -77,7 +77,7 @@ Workspace root: ${config.workspace}
 ## Key Architecture
 
 - **One DB** — patronum.db holds messages, archived messages, threads, memory chunks, and vector embeddings
-- **Auto-recall** — every user message is embedded and top matches from history are injected into context
+- **Auto-recall** — every user message is embedded and top matches from history are attached to the current turn
 - **Post-turn indexing** — each exchange is embedded and stored for future recall
 - **Compaction** — at 70% context window, older messages are summarized
 - **Dynamic subagents** — optional workspace agents are loaded from agents/*/SUBAGENT.md on demand

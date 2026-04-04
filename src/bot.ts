@@ -1,7 +1,7 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages } from "./session.js";
-import { initThread, appendToThread, loadThread, formatThreadForContext } from "./thread.js";
+import { initThread, appendToThread } from "./thread.js";
 import { runAgent, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { runAgentWithSnapshot } from "./run-agent.js";
 import { compactIfNeeded } from "./compaction.js";
@@ -103,6 +103,18 @@ async function sendMessageSafe(
       console.error("[send-fallback] Failed to send message:", e2);
     }
   }
+}
+
+function buildRecallAugmentedMessage(message: Message, recallContext: string): Message {
+  if (message.role !== "user") return message;
+
+  return {
+    role: "user",
+    content: [
+      { type: "text", text: typeof message.content === "string" ? message.content : JSON.stringify(message.content) },
+      { type: "text", text: recallContext },
+    ],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -333,28 +345,9 @@ async function handleEvent(
 
   try {
 
-  // Build extra context based on event type
-  let extraContext: string[] = [];
-
-  if (event.type === "agent_completion") {
-    const notification = [
-      `[Background Task Completed]`,
-      `Agent: ${event.agent} (task ${event.taskId})`,
-      `Result:`,
-      event.result.slice(0, 5000), // cap what Lin sees in the notification (full result is in thread)
-    ].join("\n");
-    extraContext = [notification];
-  } else if (event.type === "agent_failure") {
-    const notification = [
-      `[Background Task Failed]`,
-      `Agent: ${event.agent} (task ${event.taskId})`,
-      `Error: ${event.error}`,
-    ].join("\n");
-    extraContext = [notification];
-  }
-
-  // Load session history and thread
+  // Load session history
   const history = loadHistory(chatId);
+  const completedPrefixLength = history.length;
 
   // For user messages, add to session history
   if (event.type === "user_message") {
@@ -373,17 +366,21 @@ async function handleEvent(
     saveMessage(chatId, syntheticMessage);
   }
 
-  // Load thread context
-  const thread = loadThread(chatId);
-  const threadContext = formatThreadForContext(thread);
+  const agentHistory = [...history];
 
-  // Auto-recall: find relevant past context for user messages
+  // Auto-recall: attach relevant past context to the current user turn only.
   if (config.voyageApiKey && event.type === "user_message") {
     try {
       const recallContext = await autoRecall(event.text);
       if (recallContext) {
-        extraContext.push(recallContext);
-        console.log(`[bot] Auto-recall injected context for chat=${chatId}`);
+        const currentMessage = agentHistory[agentHistory.length - 1];
+        if (currentMessage) {
+          agentHistory[agentHistory.length - 1] = buildRecallAugmentedMessage(
+            currentMessage,
+            recallContext
+          );
+          console.log(`[bot] Auto-recall attached to current turn for chat=${chatId}`);
+        }
       }
     } catch (err) {
       console.error(`[bot] Auto-recall failed (continuing):`, err);
@@ -391,10 +388,10 @@ async function handleEvent(
   }
 
   // Run Lin
-  const agentResult = await runAgent(history, {
+  const agentResult = await runAgent(agentHistory, {
     model: config.claudeModel,
     workspace: config.workspace,
-    extraContext: [threadContext, ...extraContext],
+    completedPrefixLength,
   });
 
   const { messages: newMessages, inputTokens } = agentResult;

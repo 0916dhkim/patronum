@@ -3,12 +3,18 @@ import { getAgentDef, type AgentDef } from "./agents.js";
 import { loadThread, appendToThread, formatThreadForContext } from "./thread.js";
 import type { ThreadMessage } from "./thread.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
+import {
+  logUsage,
+  prepareMessagesForClaude,
+  prepareSystemPromptForClaude,
+} from "./prompt-cache.js";
 import type {
   Message,
   ClaudeResponse,
   ContentBlock,
   ToolUseBlock,
   ToolResultBlock,
+  TextBlock,
 } from "./types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
@@ -18,8 +24,8 @@ const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for 
 function buildAgentSystemPrompt(
   agent: AgentDef,
   threadContext: string
-): Array<{ type: "text"; text: string }> {
-  const system: Array<{ type: "text"; text: string }> = [
+): TextBlock[] {
+  const system: TextBlock[] = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
 
@@ -60,9 +66,11 @@ async function callClaudeForAgent(
     body: JSON.stringify({
       model: agent.model,
       max_tokens: MAX_TOKENS,
-      system: systemPrompt,
+      system: prepareSystemPromptForClaude(systemPrompt),
       tools,
-      messages,
+      messages: prepareMessagesForClaude(messages, {
+        cacheInitialUserMessage: true,
+      }),
     }),
     signal,
   });
@@ -134,6 +142,7 @@ export async function runAgentInThread(
     if (signal?.aborted) throw new Error("Task cancelled");
 
     const response = await callClaudeForAgent(agent, messages, systemPrompt, signal);
+    logUsage(`agent:${agent.name}`, response.usage);
 
     const assistantMessage: Message = {
       role: "assistant",
@@ -228,6 +237,7 @@ export async function runAgentWithSnapshot(
     if (signal?.aborted) throw new Error("Task cancelled");
 
     const response = await callClaudeForAgent(agent, messages, systemPrompt, signal);
+    logUsage(`agent:${agent.name}`, response.usage);
 
     const assistantMessage: Message = {
       role: "assistant",
