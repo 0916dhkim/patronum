@@ -116,7 +116,7 @@ export async function runAgentInThread(
 
   // Optionally append the task/prompt to the thread
   if (userPrompt) {
-    // The task briefing from lin goes to thread as lin's message
+    // The task briefing from the main agent goes to the thread as a main-agent message
     appendToThread(chatId, "main", userPrompt);
   }
 

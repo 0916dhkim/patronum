@@ -138,8 +138,8 @@ export function getAgentDef(name: string): AgentDef | undefined {
 }
 
 /**
- * Build a subagents summary block for injection into Lin's system prompt.
- * Lists each subagent name + description so Lin can route intelligently.
+ * Build a subagents summary block for injection into the main agent's system prompt.
+ * Lists each subagent name + description so the main agent can route intelligently.
  */
 export function buildSubagentsSummary(): string {
   const subagents = listAgentDefs();

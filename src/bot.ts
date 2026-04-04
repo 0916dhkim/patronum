@@ -176,7 +176,7 @@ export function startBot(): void {
       .catch((err) => {
         const errorMsg = err instanceof Error ? err.message : String(err);
 
-        // Don't treat cancellation as a failure that needs reporting to Lin
+        // Don't treat cancellation as a failure that needs reporting to the main agent
         if (errorMsg === "Task cancelled") {
           console.log(`[spawn] ${agentName} (${taskId}) cancelled`);
           // taskManager.cancel already set the status
@@ -355,7 +355,7 @@ async function handleEvent(
     history.push(userMessage);
     saveMessage(chatId, userMessage);
   } else {
-    // For agent events, inject a synthetic user message so Lin can respond
+    // For agent events, inject a synthetic user message so the main agent can respond
     const systemText =
       event.type === "agent_completion"
         ? `[system] Background task completed: ${event.agent} (${event.taskId})\nResult: ${event.result.slice(0, 2000)}`
@@ -387,7 +387,7 @@ async function handleEvent(
     }
   }
 
-  // Run Lin
+  // Run the main agent
   const agentResult = await runAgent(agentHistory, {
     model: config.claudeModel,
     workspace: config.workspace,
@@ -422,7 +422,7 @@ async function handleEvent(
   // Extract reply text
   const reply = extractTextFromResponse(newMessages);
 
-  // Append Lin's response to the shared thread
+  // Append the main agent's response to the shared thread
   appendToThread(chatId, "main", reply);
 
   // Post-turn: index this exchange into vector memory

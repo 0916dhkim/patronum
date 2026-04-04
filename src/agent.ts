@@ -103,7 +103,7 @@ export interface AgentResult {
  * This can happen when:
  * - loadHistory's LIMIT cuts mid tool-call pair
  * - compaction splits between a tool_use and its tool_result
- * - async event triggers a new Lin turn with stale history
+ * - async event triggers a new main-agent turn with stale history
  */
 function sanitizeMessages(messages: Message[]): Message[] {
   const result: Message[] = [];
@@ -178,7 +178,7 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
     if (signal?.aborted) throw new Error("Task cancelled");
 
     const response = await callClaude(conversation, options, signal);
-    logUsage("lin", response.usage);
+    logUsage("main-agent", response.usage);
 
     // Track total processed input so compaction still reflects cached prefixes.
     lastInputTokens = getTotalInputTokens(response.usage) || lastInputTokens;
