@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=patronum
-WorkingDirectory=/home/danny/patronum-workspace
-ExecStart=/usr/bin/node /home/danny/patronum-workspace/source/dist/index.js
+WorkingDirectory=/var/lib/patronum
+ExecStart=/usr/bin/node /var/lib/patronum/source/dist/index.js
 Restart=always
 RestartSec=5
 StandardOutput=journal

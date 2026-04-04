@@ -65,8 +65,7 @@ Workspace root: ${config.workspace}
 ├── AGENTS.md       — Your rules and preferences (user-editable)
 ├── MEMORY.md       — Curated persistent facts (you can edit this)
 ├── patronum.db     — SQLite database (messages, memory, threads)
-├── skills/         — Skill definitions (SKILL.md with frontmatter, auto-discovered)
-└── .env            — Environment config (tokens, model)
+└── skills/         — Skill definitions (SKILL.md with frontmatter, auto-discovered)
 
 ## Self-Editing Workflow
 
