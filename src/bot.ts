@@ -328,6 +328,32 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  // Graceful shutdown — register before launch so it catches signals
+  const shutdown = async (signal: string) => {
+    console.log(`[patronum] Received ${signal}, shutting down...`);
+
+    // Cancel all running tasks
+    for (const [, state] of chatStates) {
+      // No need to process completions on shutdown
+      state.queue = [];
+    }
+
+    // Send offline message BEFORE stopping bot, with 2-second timeout
+    if (config.ownerChatId) {
+      try {
+        await Promise.race([
+          bot.telegram.sendMessage(config.ownerChatId, "🔴 Patronum offline"),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
+        ]);
+      } catch (err) {
+        console.error("[patronum] Failed to send shutdown notification:", err);
+      }
+    }
+    bot.stop(signal);
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+
   // Launch with retry — Telegram sometimes holds polling sessions for 30-60s
   let launchAttempts = 0;
   const maxAttempts = 5;
@@ -359,65 +385,48 @@ export async function startBot(): Promise<void> {
 
   console.log("[patronum] Bot started (async multi-agent mode)");
 
-  // Check for restart resume state
+  // Check for restart resume state and send notifications BEFORE launch blocking
   const restartState = loadRestartState();
   if (restartState && restartState.chatId) {
     console.log(`[patronum] Resuming after restart: ${restartState.reason}`);
 
     // Send "back online" notification and clear state (resume succeeded)
-    bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").then(() => {
-      clearRestartState();
-    }).catch((err) => {
-      console.error("[patronum] Failed to send restart notification:", err);
-      clearRestartState(); // clear anyway — don't want a Telegram error to cause a loop
-    });
+    // Give it 3 seconds to settle before injecting resume context
+    setTimeout(() => {
+      bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").then(() => {
+        clearRestartState();
+      }).catch((err) => {
+        console.error("[patronum] Failed to send restart notification:", err);
+        clearRestartState(); // clear anyway — don't want a Telegram error to cause a loop
+      });
 
-    // If there's resume context, inject it as a synthetic message to continue work
-    if (restartState.resumeContext) {
-      setTimeout(() => {
-        const resumeText = `[system] Resumed after restart (${restartState.reason}). Resume context: ${restartState.resumeContext}`;
-        const state = getChatState(restartState.chatId);
-        // Create a synthetic event to trigger the agent
-        const syntheticEvent: ChatEvent = {
-          type: "agent_completion",
-          taskId: "restart-resume",
-          agent: "system",
-          result: resumeText,
-        };
-        state.queue.push(syntheticEvent);
-        processQueue(restartState.chatId, bot);
-      }, 2000); // small delay to let Telegram settle
-    }
+      // If there's resume context, inject it as a synthetic message to continue work
+      if (restartState.resumeContext) {
+        setTimeout(() => {
+          const resumeText = `[system] Resumed after restart (${restartState.reason}). Resume context: ${restartState.resumeContext}`;
+          const state = getChatState(restartState.chatId);
+          // Create a synthetic event to trigger the agent
+          const syntheticEvent: ChatEvent = {
+            type: "agent_completion",
+            taskId: "restart-resume",
+            agent: "system",
+            result: resumeText,
+          };
+          state.queue.push(syntheticEvent);
+          processQueue(restartState.chatId, bot);
+        }, 1000); // small delay after "back online" to let it send
+      }
+    }, 3000); // 3s delay to let polling connection establish
   } else if (config.ownerChatId) {
-    bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online").catch((err) => {
-      console.error("[patronum] Failed to send startup notification:", err);
-    });
+    setTimeout(() => {
+      bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online").catch((err) => {
+        console.error("[patronum] Failed to send startup notification:", err);
+      });
+    }, 3000); // 3s delay to let polling connection establish
   }
 
   // Log on startup that in-memory tasks are cleared
   console.log("[patronum] TaskManager reset — any previously running tasks are lost.");
-
-  // Graceful shutdown
-  const shutdown = async (signal: string) => {
-    console.log(`[patronum] Received ${signal}, shutting down...`);
-
-    // Cancel all running tasks
-    for (const [, state] of chatStates) {
-      // No need to process completions on shutdown
-      state.queue = [];
-    }
-
-    if (config.ownerChatId) {
-      try {
-        await bot.telegram.sendMessage(config.ownerChatId, "🔴 Patronum offline");
-      } catch (err) {
-        console.error("[patronum] Failed to send shutdown notification:", err);
-      }
-    }
-    bot.stop(signal);
-  };
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 // ---------------------------------------------------------------------------
