@@ -5,6 +5,7 @@ import { initThread, appendToThread, loadThread, formatThreadForContext } from "
 import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { DraftStreamer } from "./draft-stream.js";
 import { runAgentWithSnapshot } from "./run-agent.js";
+import { getAgentDef } from "./agents.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
@@ -138,8 +139,13 @@ export function startBot(): void {
     if (!agentTask) return;
 
     // Fire-and-forget: run the agent in background
+    const agentDef = getAgentDef(agentName);
+    if (!agentDef) {
+      taskManager.fail(taskId, `Unknown agent: ${agentName}`);
+      return;
+    }
     runAgentWithSnapshot(
-      agentName,
+      agentDef,
       chatId,
       task,
       agentTask.threadSnapshot,

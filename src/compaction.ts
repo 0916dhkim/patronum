@@ -110,6 +110,11 @@ function messageToText(msg: Message): string {
       continue;
     }
 
+    if (block.type === "image") {
+      parts.push(`- Image (base64, omitted)`);
+      continue;
+    }
+
     const status = block.is_error ? "error" : "ok";
     parts.push(
       `- Tool result (${status}): ${truncateText(normalizeWhitespace(block.content), MAX_TOOL_RESULT_CHARS)}`

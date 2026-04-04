@@ -10,6 +10,17 @@ export interface AgentDef {
   systemPrompt: string; // body of SUBAGENT.md (below frontmatter)
 }
 
+interface SubagentFrontmatter {
+  name?: string;
+  description?: string;
+  model?: string;
+}
+
+interface ParsedSubagent {
+  definition: AgentDef;
+  sourcePath: string;
+}
+
 /**
  * Parse YAML-style frontmatter from a markdown file.
  * Returns { frontmatter, body }.
@@ -136,4 +147,9 @@ export function buildSubagentsSummary(): string {
 
   const lines = subagents.map((a) => `- **${a.name}**: ${a.description}`);
   return `[Available Subagents]\n\n${lines.join("\n")}`;
+}
+
+
+export function resetAgentsCache(): void {
+  // No-op: upstream version does not cache agent defs
 }

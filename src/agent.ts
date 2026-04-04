@@ -4,6 +4,11 @@ import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import { buildSubagentsSummary } from "./agents.js";
 import { buildSkillsSummary, buildSkillBodies } from "./skills.js";
+import {
+  prepareMessagesForClaude,
+  prepareSystemPromptForClaude,
+  logUsage,
+} from "./prompt-cache.js";
 
 import type {
   Message,
@@ -68,7 +73,12 @@ function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: 
   return system;
 }
 
-async function callClaude(messages: Message[], options?: AgentOptions, signal?: AbortSignal): Promise<ClaudeResponse> {
+async function callClaude(
+  messages: Message[],
+  options?: AgentOptions,
+  signal?: AbortSignal,
+  completedPrefixLength = 0
+): Promise<ClaudeResponse> {
   const model = options?.model || config.claudeModel;
 
   const response = await fetch(API_URL, {
@@ -85,9 +95,9 @@ async function callClaude(messages: Message[], options?: AgentOptions, signal?: 
     body: JSON.stringify({
       model,
       max_tokens: MAX_TOKENS,
-      system: buildSystemPrompt(options),
+      system: prepareSystemPromptForClaude(buildSystemPrompt(options)),
       tools: getToolDefinitions(),
-      messages,
+      messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
     }),
     signal,
   });
@@ -103,7 +113,8 @@ async function callClaude(messages: Message[], options?: AgentOptions, signal?: 
 async function callClaudeStreaming(
   messages: Message[],
   options?: AgentOptions,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  completedPrefixLength = 0
 ): Promise<Response> {
   const model = options?.model || config.claudeModel;
 
@@ -121,9 +132,9 @@ async function callClaudeStreaming(
     body: JSON.stringify({
       model,
       max_tokens: MAX_TOKENS,
-      system: buildSystemPrompt(options),
+      system: prepareSystemPromptForClaude(buildSystemPrompt(options)),
       tools: getToolDefinitions(),
-      messages,
+      messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
       stream: true,
     }),
     signal,
@@ -204,6 +215,9 @@ export async function runAgentStreaming(
   signal?: AbortSignal
 ): Promise<AgentResult> {
   const conversation = sanitizeMessages([...messages]);
+  // Track how many messages existed before this turn started — those are the stable
+  // cached prefix. New messages appended during the tool loop are not yet cached.
+  const initialLength = conversation.length;
   const newMessages: Message[] = [];
   let lastInputTokens = 0;
   let fullAccumulatedText = "";
@@ -212,7 +226,7 @@ export async function runAgentStreaming(
   while (true) {
     if (signal?.aborted) throw new Error("Task cancelled");
 
-    const response = await callClaudeStreaming(conversation, options, signal);
+    const response = await callClaudeStreaming(conversation, options, signal, initialLength);
 
     // Track accumulated content blocks in original order
     const contentBlocks: ContentBlock[] = [];
@@ -228,6 +242,7 @@ export async function runAgentStreaming(
     for await (const event of parseSSEStream(response, signal)) {
       if (event.type === "message_start") {
         lastInputTokens = event.message.usage?.input_tokens ?? lastInputTokens;
+        logUsage("lin", event.message.usage);
       } else if (event.type === "content_block_start") {
         if (event.content_block.type === "text") {
           currentBlockType = "text";
@@ -414,6 +429,7 @@ function sanitizeMessages(messages: Message[]): Message[] {
 
 export async function runAgent(messages: Message[], options?: AgentOptions, signal?: AbortSignal): Promise<AgentResult> {
   const conversation = sanitizeMessages([...messages]);
+  const initialLength = conversation.length;
   const newMessages: Message[] = [];
   let lastInputTokens = 0;
 
@@ -421,10 +437,11 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
   while (true) {
     if (signal?.aborted) throw new Error("Task cancelled");
 
-    const response = await callClaude(conversation, options, signal);
+    const response = await callClaude(conversation, options, signal, initialLength);
 
     // Track the latest input_tokens from the API response
     lastInputTokens = response.usage?.input_tokens ?? lastInputTokens;
+    logUsage("lin", response.usage);
 
     const assistantMessage: Message = {
       role: "assistant",
