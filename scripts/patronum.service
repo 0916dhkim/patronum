@@ -1,0 +1,16 @@
+[Unit]
+Description=Patronum AI Agent
+After=network.target
+
+[Service]
+Type=simple
+User=patronum
+WorkingDirectory=/home/danny/patronum-workspace
+ExecStart=/usr/bin/node /home/danny/patronum-workspace/source/dist/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
