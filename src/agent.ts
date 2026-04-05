@@ -25,7 +25,7 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 8192;
 
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
-const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 export type ToolExecutor = (
   name: string,
@@ -41,6 +41,8 @@ export interface AgentOptions {
   extraContext?: string[];
   /** Optional custom tool executor (defaults to executeTool) */
   toolExecutor?: ToolExecutor;
+  /** Override system prompt entirely (bypasses buildSystemPrompt) */
+  systemPrompt?: Array<{ type: "text"; text: string }>;
 }
 
 function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
@@ -88,6 +90,7 @@ async function callClaude(
   completedPrefixLength = 0
 ): Promise<ClaudeResponse> {
   const model = options?.model || config.claudeModel;
+  const systemPrompt = options?.systemPrompt || buildSystemPrompt(options);
 
   const response = await fetch(API_URL, {
     method: "POST",
@@ -103,7 +106,7 @@ async function callClaude(
     body: JSON.stringify({
       model,
       max_tokens: MAX_TOKENS,
-      system: prepareSystemPromptForClaude(buildSystemPrompt(options)),
+      system: prepareSystemPromptForClaude(systemPrompt),
       tools: getToolDefinitions(),
       messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
     }),
@@ -125,6 +128,7 @@ async function callClaudeStreaming(
   completedPrefixLength = 0
 ): Promise<Response> {
   const model = options?.model || config.claudeModel;
+  const systemPrompt = options?.systemPrompt || buildSystemPrompt(options);
 
   const response = await fetch(API_URL, {
     method: "POST",
@@ -140,7 +144,7 @@ async function callClaudeStreaming(
     body: JSON.stringify({
       model,
       max_tokens: MAX_TOKENS,
-      system: prepareSystemPromptForClaude(buildSystemPrompt(options)),
+      system: prepareSystemPromptForClaude(systemPrompt),
       tools: getToolDefinitions(),
       messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
       stream: true,

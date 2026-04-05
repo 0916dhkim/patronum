@@ -1,5 +1,6 @@
-import { runAgent, extractTextFromResponse } from "../agent.js";
-import { executeTool } from "../tools/index.js";
+import { runAgent, extractTextFromResponse, CLAUDE_CODE_IDENTITY } from "../agent.js";
+import { executeTool, setCurrentChatId } from "../tools/index.js";
+import { getAgentDef } from "../agents.js";
 import { EvalTest } from "./loader.js";
 import { createInterceptor, ToolCallEntry } from "./interceptor.js";
 import { evaluateDeterministicAssertions, AssertionResult } from "./assertions.js";
@@ -71,8 +72,30 @@ ${test.input.mock_recall}
       content: userMessage,
     });
 
-    // Create interceptor
-    const interceptor = createInterceptor(executeTool);
+    // Determine if this is a subagent test and get agent def if needed
+    let agentDef = null;
+    if (test.agent) {
+      agentDef = getAgentDef(test.agent);
+      if (!agentDef) {
+        return {
+          name: test.name,
+          status: "ERROR",
+          duration_ms: Date.now() - startTime,
+          toolAssertions: [],
+          gradedAssertions: [],
+          substringAssertions: [],
+          toolCallLog: [],
+          agentResponseText: "(error)",
+          error: `Agent not found: ${test.agent}`,
+        };
+      }
+    }
+
+    // Create interceptor (subagent mode if testing a subagent)
+    const interceptor = createInterceptor(executeTool, { subagentMode: !!agentDef });
+
+    // Set a fake chat ID for tools that need it
+    setCurrentChatId("eval-test-" + test.name);
 
     // Run the agent with the intercepted executor
     let result;
@@ -92,7 +115,21 @@ ${test.input.mock_recall}
         return interceptor.executor(name, input);
       };
 
-      result = await runAgent(messages, { toolExecutor: countingExecutor });
+      // Build options for runAgent
+      const agentOptions: Parameters<typeof runAgent>[1] = {
+        toolExecutor: countingExecutor,
+      };
+
+      // If testing a subagent, inject its model and system prompt
+      if (agentDef) {
+        agentOptions.model = agentDef.model;
+        agentOptions.systemPrompt = [
+          { type: "text", text: CLAUDE_CODE_IDENTITY },
+          { type: "text", text: agentDef.systemPrompt },
+        ];
+      }
+
+      result = await runAgent(messages, agentOptions);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("exceeded")) {

@@ -20,6 +20,8 @@ export interface EvalTestAssertions {
 export interface EvalTest {
   name: string;
   description?: string;
+  agent?: string;
+  tags?: string[];
   input: EvalTestInput;
   assertions: EvalTestAssertions;
 }
@@ -82,9 +84,42 @@ function validateTest(test: unknown, filename: string): EvalTest {
     assertions = obj.assertions as EvalTestAssertions;
   }
 
+  // Validate agent if present
+  let agent: string | undefined;
+  if (obj.agent !== undefined) {
+    if (typeof obj.agent !== "string") {
+      throw new Error(`Invalid test in ${filename}: agent must be a string (got ${typeof obj.agent})`);
+    }
+    agent = obj.agent;
+  }
+
+  // Validate tags if present
+  let tags: string[] | undefined;
+  if (obj.tags !== undefined) {
+    if (!Array.isArray(obj.tags)) {
+      throw new Error(`Invalid test in ${filename}: tags must be an array`);
+    }
+    tags = [];
+    for (let i = 0; i < obj.tags.length; i++) {
+      const tag = obj.tags[i];
+      if (typeof tag !== "string") {
+        throw new Error(`Invalid test in ${filename}: tags[${i}] must be a string`);
+      }
+      if (tag !== tag.toLowerCase()) {
+        throw new Error(`Invalid test in ${filename}: tags[${i}] must be lowercase (got "${tag}")`);
+      }
+      if (tag.includes(" ")) {
+        throw new Error(`Invalid test in ${filename}: tags[${i}] must not contain spaces (got "${tag}")`);
+      }
+      tags.push(tag);
+    }
+  }
+
   return {
     name: obj.name,
     description: typeof obj.description === "string" ? obj.description : undefined,
+    agent,
+    tags,
     input: {
       history,
       message: input.message,
@@ -137,4 +172,17 @@ export function loadTest(name: string): EvalTest {
   const content = readFileSync(testPath, "utf-8");
   const parsed = parseYaml(content);
   return validateTest(parsed, `${name}.yaml`);
+}
+
+/**
+ * Filter tests by one or more tags (OR logic).
+ * Returns tests that have at least one matching tag.
+ */
+export function filterByTags(tests: EvalTest[], tags: string[]): EvalTest[] {
+  if (tags.length === 0) return tests;
+  const tagSet = new Set(tags);
+  return tests.filter((test) => {
+    if (!test.tags) return false;
+    return test.tags.some((tag) => tagSet.has(tag));
+  });
 }

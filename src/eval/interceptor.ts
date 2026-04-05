@@ -12,21 +12,56 @@ export interface Interceptor {
   getLog: () => ToolCallEntry[];
 }
 
+export interface InterceptorOptions {
+  /** If true, mock only dangerous tools. Everything else is real. (default: false) */
+  subagentMode?: boolean;
+}
+
 /**
  * Create an intercepted tool executor for eval runs.
- * Logs every tool call. Real execution for read and memory_search.
+ * 
+ * Lin mode (default): Logs every tool call. Real execution for read and memory_search.
  * Everything else returns a mock response.
+ * 
+ * Subagent mode: Logs every tool call. Real execution for most tools EXCEPT
+ * dangerous/unsafe ones (self_restart, spawn_agent, memory_write, etc).
  */
 export function createInterceptor(
-  realExecutor: (name: string, input: Record<string, unknown>) => Promise<{ result: string; isError: boolean }>
+  realExecutor: (name: string, input: Record<string, unknown>) => Promise<{ result: string; isError: boolean }>,
+  options?: InterceptorOptions
 ): Interceptor {
   const log: ToolCallEntry[] = [];
+  const subagentMode = options?.subagentMode ?? false;
 
   const executor: ToolExecutor = async (name: string, input: Record<string, unknown>) => {
     const timestamp = Date.now();
 
-    // Real execution for safe reads
-    if (name === "read" || name === "memory_search") {
+    // Tools to always mock in any mode (dangerous, global-state mutation, costly)
+    const dangerousTools = new Set([
+      "self_restart",
+      "spawn_agent",
+      "cancel_agent",
+      "memory_write",
+      "vaultwarden",
+      "send_media",
+      "list_tasks",
+      "read_agent_thread",
+      "list_agent_threads",
+    ]);
+
+    // In Lin mode: only real tools are read and memory_search
+    const realToolsLinMode = new Set(["read", "memory_search"]);
+
+    let shouldExecuteReally: boolean;
+    if (subagentMode) {
+      // Subagent mode: execute all EXCEPT dangerous tools
+      shouldExecuteReally = !dangerousTools.has(name);
+    } else {
+      // Lin mode: execute only whitelisted tools
+      shouldExecuteReally = realToolsLinMode.has(name);
+    }
+
+    if (shouldExecuteReally) {
       try {
         const { result, isError } = await realExecutor(name, input);
         log.push({ name, input, timestamp, result });
@@ -38,7 +73,7 @@ export function createInterceptor(
       }
     }
 
-    // Everything else: mock response
+    // Mock response for disabled tools
     const mocks: Record<string, string> = {
       exec: "(eval: command not executed)",
       write: "(eval: file not written)",

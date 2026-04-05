@@ -3,15 +3,29 @@
 import process from "node:process";
 import { initConfig, config } from "./config.js";
 import { initMemoryStore, initEmbeddings } from "./memory/index.js";
-import { loadAllTests, loadTest } from "./eval/loader.js";
+import { loadAllTests, loadTest, filterByTags, type EvalTest } from "./eval/loader.js";
 import { runAllTests, runTest } from "./eval/runner.js";
 import { saveResults, loadRecentResults } from "./eval/results.js";
 import { compareRuns } from "./eval/compare.js";
 
-async function printTestResults(testName?: string): Promise<number> {
-  const result = testName ? { tests: [loadTest(testName)], errors: [] } : loadAllTests();
-  const tests = result.tests;
-  const loadErrors = result.errors;
+async function printTestResults(testName?: string, tags?: string[]): Promise<number> {
+  let tests: EvalTest[] = [];
+  let loadErrors: Array<{ file: string; message: string }> = [];
+
+  if (testName) {
+    // Load a specific test by name
+    try {
+      tests = [loadTest(testName)];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      loadErrors = [{ file: `${testName}.yaml`, message: msg }];
+    }
+  } else {
+    // Load all tests, optionally filtered by tags
+    const result = loadAllTests();
+    tests = tags && tags.length > 0 ? filterByTags(result.tests, tags) : result.tests;
+    loadErrors = result.errors;
+  }
 
   // Report any load errors
   if (loadErrors.length > 0) {
@@ -138,13 +152,35 @@ async function main(): Promise<number> {
     const command = args[0] || "run";
 
     if (command === "run") {
-      const testName = args[1];
-      return await printTestResults(testName);
+      // Parse remaining arguments: [test-name] [--tag tag1 [--tag tag2 ...]]
+      const testName = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+      
+      // Collect --tag arguments
+      const tags: string[] = [];
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--tag" && i + 1 < args.length) {
+          tags.push(args[i + 1]);
+          i++; // Skip the tag value
+        }
+      }
+
+      // Validate mutually exclusive: testName and tags
+      if (testName && tags.length > 0) {
+        console.error("❌ Error: --tag and test-name are mutually exclusive");
+        console.error("Usage:");
+        console.error("  eval.js run                     (run all tests)");
+        console.error("  eval.js run <test-name>         (run specific test)");
+        console.error("  eval.js run --tag <tag>         (run tests with tag)");
+        console.error("  eval.js run --tag <tag1> --tag <tag2>  (run tests with any tag)");
+        return 1;
+      }
+
+      return await printTestResults(testName, tags);
     } else if (command === "compare") {
       return await printComparison();
     } else {
       console.error(`Unknown command: ${command}`);
-      console.error("Usage: eval.js [run [test-name] | compare]");
+      console.error("Usage: eval.js [run [test-name] | run --tag <tag> | compare]");
       return 1;
     }
   } catch (err) {
