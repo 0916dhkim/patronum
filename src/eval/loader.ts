@@ -19,7 +19,7 @@ export type ContentBlock =
 
 export interface EvalTestInput {
   history?: Array<{ role: "user" | "assistant"; content: ContentBlock }>;
-  message: string;
+  message?: string;
   mock_recall?: string;
 }
 
@@ -58,8 +58,8 @@ function validateTest(test: unknown, filename: string): EvalTest {
   }
 
   const input = obj.input as Record<string, unknown>;
-  if (!input.message || typeof input.message !== "string") {
-    throw new Error(`Invalid test in ${filename}: input.message is required (string)`);
+  if (input.message !== undefined && typeof input.message !== "string") {
+    throw new Error(`Invalid test in ${filename}: input.message must be a string if provided`);
   }
 
   // Validate history if present
@@ -147,7 +147,7 @@ function validateTest(test: unknown, filename: string): EvalTest {
     tags,
     input: {
       history,
-      message: input.message,
+      message: typeof input.message === "string" ? input.message : undefined,
       mock_recall: typeof input.mock_recall === "string" ? input.mock_recall : undefined,
     },
     assertions,

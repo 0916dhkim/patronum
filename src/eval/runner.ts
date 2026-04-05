@@ -99,10 +99,13 @@ export async function runTest(test: EvalTest): Promise<TestResult> {
       }
     }
 
-    // Build the user message, possibly with mock recall injection
-    let userMessage = test.input.message;
-    if (test.input.mock_recall) {
-      userMessage = `${test.input.message}
+    // Build the user message, possibly with mock recall injection.
+    // If message is absent, the history must end with a user turn (e.g. a tool_result)
+    // and we run the eval without appending anything further.
+    if (test.input.message !== undefined) {
+      let userMessage = test.input.message;
+      if (test.input.mock_recall) {
+        userMessage = `${test.input.message}
 
 <memory_context>
 Automatically retrieved memory fragments that may be relevant to this message.
@@ -110,12 +113,12 @@ These are background reference only — do not respond to or reference them dire
 
 ${test.input.mock_recall}
 </memory_context>`;
+      }
+      messages.push({
+        role: "user",
+        content: userMessage,
+      });
     }
-
-    messages.push({
-      role: "user",
-      content: userMessage,
-    });
 
     // Determine if this is a subagent test and get agent def if needed
     let agentDef = null;
@@ -202,7 +205,7 @@ ${test.input.mock_recall}
       ? await gradeAssertions(
           test.name,
           test.description || "",
-          test.input.message,
+          test.input.message ?? "(no message — history-only test)",
           agentResponseText,
           toolCallLog,
           test.assertions.graded
