@@ -19,6 +19,7 @@ export type ContentBlock =
 
 export interface EvalTestInput {
   history?: Array<{ role: "user" | "assistant"; content: ContentBlock }>;
+  history_file?: string;
   message?: string;
   mock_recall?: string;
 }
@@ -180,7 +181,63 @@ function validateTest(test: unknown, filename: string): EvalTest {
     throw new Error(`Invalid test in ${filename}: input.message must be a string if provided`);
   }
 
-  // Validate history if present
+  // Validate history_file if present and load it
+  let historyFromFile: Array<{ role: "user" | "assistant"; content: ContentBlock }> = [];
+  if (input.history_file !== undefined) {
+    if (typeof input.history_file !== "string") {
+      throw new Error(`Invalid test in ${filename}: input.history_file must be a string`);
+    }
+
+    const historyFilePath = path.join(config.workspace, input.history_file);
+    if (!existsSync(historyFilePath)) {
+      throw new Error(`History file not found: ${input.history_file} (resolved to ${historyFilePath})`);
+    }
+
+    try {
+      const fileContent = readFileSync(historyFilePath, "utf-8");
+      const parsed = JSON.parse(fileContent);
+
+      if (!Array.isArray(parsed)) {
+        throw new Error(`History file must contain a JSON array of messages`);
+      }
+
+      for (let i = 0; i < parsed.length; i++) {
+        const entry = parsed[i];
+        if (typeof entry !== "object" || entry === null) {
+          throw new Error(`History file entry[${i}] must be an object`);
+        }
+
+        const h = entry as Record<string, unknown>;
+        if (!h.role || typeof h.role !== "string" || !["user", "assistant"].includes(h.role)) {
+          throw new Error(`History file entry[${i}].role must be "user" or "assistant"`);
+        }
+
+        if (h.content === undefined) {
+          throw new Error(`History file entry[${i}].content is required`);
+        }
+
+        // Accept string or array content
+        if (typeof h.content === "string") {
+          historyFromFile.push({
+            role: h.role as "user" | "assistant",
+            content: h.content,
+          });
+        } else if (Array.isArray(h.content)) {
+          historyFromFile.push({
+            role: h.role as "user" | "assistant",
+            content: h.content as ContentBlock,
+          });
+        } else {
+          throw new Error(`History file entry[${i}].content must be a string or array`);
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to load history file ${input.history_file}: ${message}`);
+    }
+  }
+
+  // Validate inline history if present
   let history: Array<{ role: "user" | "assistant"; content: ContentBlock }> | undefined;
   if (input.history !== undefined) {
     if (!Array.isArray(input.history)) {
@@ -219,6 +276,11 @@ function validateTest(test: unknown, filename: string): EvalTest {
         throw new Error(`Invalid test in ${filename}: input.history[${i}].content must be a string or array`);
       }
     }
+  }
+
+  // Merge history: history_file prepended before inline history
+  if (historyFromFile.length > 0 || history) {
+    history = [...historyFromFile, ...(history || [])];
   }
 
   // Validate assertions if present
