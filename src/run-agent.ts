@@ -14,7 +14,7 @@ import type {
   ToolResultBlock,
   TextBlock,
 } from "./types.js";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 8192;
@@ -179,22 +179,45 @@ function filterAndSanitizeContent(content: ContentBlock[]): ContentBlock[] {
 
 /**
  * Capture agent messages to a JSON fixture file.
- * Triggered by env vars: PATRONUM_CAPTURE_AGENT and PATRONUM_CAPTURE_OUTPUT
+ *
+ * Triggered by sentinel file: `/var/lib/patronum/.capture.json`
+ * If the file exists and is valid JSON with `{ agent: string, output: string }`, capture is enabled.
+ * If the file doesn't exist, capture is off (zero impact).
+ * If the file exists but is malformed, a warning is logged and capture is skipped.
+ *
+ * Format of `.capture.json`:
+ * ```json
+ * {
+ *   "agent": "alex",
+ *   "output": "/var/lib/patronum/tests/fixtures/alex-overspec-plan.json"
+ * }
+ * ```
  */
 function captureAgentMessages(agentName: string, messages: Message[]): void {
-  const captureAgent = process.env.PATRONUM_CAPTURE_AGENT;
-  const captureOutput = process.env.PATRONUM_CAPTURE_OUTPUT;
+  const captureFilePath = "/var/lib/patronum/.capture.json";
 
-  // Warn if only one env var is set
-  if ((captureAgent && !captureOutput) || (!captureAgent && captureOutput)) {
-    console.warn(
-      "[capture] Both PATRONUM_CAPTURE_AGENT and PATRONUM_CAPTURE_OUTPUT must be set to enable capture. Skipping."
-    );
+  // If the sentinel file doesn't exist, capture is off
+  if (!existsSync(captureFilePath)) {
     return;
   }
 
-  // Both env vars required
-  if (!captureAgent || !captureOutput) {
+  // Try to read and parse the sentinel file
+  let captureConfig: { agent?: unknown; output?: unknown };
+  try {
+    const fileContent = readFileSync(captureFilePath, "utf-8");
+    captureConfig = JSON.parse(fileContent);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[capture] Failed to read or parse ${captureFilePath}: ${message}`);
+    return;
+  }
+
+  // Validate the config shape
+  const { agent: captureAgent, output: captureOutput } = captureConfig;
+  if (typeof captureAgent !== "string" || typeof captureOutput !== "string") {
+    console.warn(
+      `[capture] Invalid ${captureFilePath}: must contain { agent: string, output: string }. Skipping.`
+    );
     return;
   }
 
@@ -313,7 +336,7 @@ export async function runAgentWithThread(
     messages.push(toolResultMessage);
   }
 
-  // Capture messages if env vars are set
+  // Capture messages if .capture.json sentinel file is present
   captureAgentMessages(agent.name, messages);
 
   const finalText = extractFinalText(lastAssistantContent);
