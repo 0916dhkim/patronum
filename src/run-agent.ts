@@ -64,8 +64,9 @@ async function callClaudeForAgent(
     body.tool_choice = toolChoice;
   }
 
-  // Add thinking if enabled for this agent
-  if (agent.thinking) {
+  // Add thinking if enabled for this agent — but NOT when tool_choice forces a specific tool,
+  // as the Anthropic API does not allow thinking + forced tool_choice simultaneously.
+  if (agent.thinking && !toolChoice) {
     body.thinking = { type: "adaptive" };
   }
 
