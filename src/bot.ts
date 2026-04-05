@@ -1,10 +1,10 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages } from "./session.js";
-import { initThread, appendToThread, loadThread, formatThreadForContext } from "./thread.js";
+import { initAgentThread, appendToAgentThread } from "./agent-thread.js";
 import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { DraftStreamer } from "./draft-stream.js";
-import { runAgentWithSnapshot } from "./run-agent.js";
+import { runAgentWithThread } from "./run-agent.js";
 import { getAgentDef } from "./agents.js";
 import { compactIfNeeded } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
@@ -23,8 +23,8 @@ const TELEGRAM_MSG_LIMIT = 4096;
 type ChatEvent =
   | { type: "user_message"; text: string; ctx: import("telegraf").Context }
   | { type: "user_photo"; caption: string; imageBase64: string; mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; ctx: import("telegraf").Context }
-  | { type: "agent_completion"; taskId: string; agent: string; result: string }
-  | { type: "agent_failure"; taskId: string; agent: string; error: string };
+  | { type: "agent_completion"; taskId: string; agent: string; result: string; threadName: string }
+  | { type: "agent_failure"; taskId: string; agent: string; error: string; threadName: string };
 
 interface ChatState {
   queue: ChatEvent[];
@@ -114,7 +114,7 @@ async function sendMessageSafe(
 
 export async function startBot(): Promise<void> {
   initSession();
-  initThread();
+  initAgentThread();
 
   // Initialize memory system (vector search)
   if (config.voyageApiKey) {
@@ -144,18 +144,19 @@ export async function startBot(): Promise<void> {
       taskManager.fail(taskId, `Unknown agent: ${agentName}`);
       return;
     }
-    runAgentWithSnapshot(
+    runAgentWithThread(
       agentDef,
       chatId,
       task,
-      agentTask.threadSnapshot,
+      agentTask.threadId,
+      agentTask.threadName,
       agentTask.abortController.signal
     )
       .then((result) => {
         taskManager.complete(taskId, result);
 
-        // Append result to the live thread
-        appendToThread(chatId, agentName as "alex" | "iris" | "quill", result);
+        // Append result to the agent thread
+        appendToAgentThread(agentTask.threadId, agentName, result);
 
         console.log(`[spawn] ${agentName} (${taskId}) completed (${result.length} chars)`);
 
@@ -166,6 +167,7 @@ export async function startBot(): Promise<void> {
           taskId,
           agent: agentName,
           result,
+          threadName: agentTask.threadName,
         });
         processQueue(chatId, bot);
       })
@@ -181,8 +183,8 @@ export async function startBot(): Promise<void> {
 
         taskManager.fail(taskId, errorMsg);
 
-        // Append failure to the live thread
-        appendToThread(chatId, "system", `Agent ${agentName} (task ${taskId}) failed: ${errorMsg}`);
+        // Append failure to the agent thread
+        appendToAgentThread(agentTask.threadId, "system", `Agent ${agentName} (task ${taskId}) failed: ${errorMsg}`);
 
         console.error(`[spawn] ${agentName} (${taskId}) failed:`, errorMsg);
 
@@ -192,6 +194,7 @@ export async function startBot(): Promise<void> {
           taskId,
           agent: agentName,
           error: errorMsg,
+          threadName: agentTask.threadName,
         });
         processQueue(chatId, bot);
       });
@@ -267,9 +270,6 @@ export async function startBot(): Promise<void> {
     setCurrentChatId(chatId);
     setSendMediaChatId(chatId);
 
-    // Append to thread immediately
-    appendToThread(chatId, "user", userText);
-
     // Enqueue and process
     const state = getChatState(chatId);
     state.queue.push({ type: "user_message", text: userText, ctx });
@@ -316,8 +316,6 @@ export async function startBot(): Promise<void> {
       if (url.includes(".png")) mediaType = "image/png";
       else if (url.includes(".gif")) mediaType = "image/gif";
       else if (url.includes(".webp")) mediaType = "image/webp";
-
-      appendToThread(chatId, "user", caption);
 
       const state = getChatState(chatId);
       state.queue.push({ type: "user_photo", caption, imageBase64, mediaType, ctx });
@@ -415,6 +413,7 @@ export async function startBot(): Promise<void> {
             taskId: "restart-resume",
             agent: "system",
             result: resumeText,
+            threadName: "restart",
           };
           state.queue.push(syntheticEvent);
           processQueue(restartState.chatId, bot);
@@ -485,28 +484,23 @@ async function handleEvent(
 
   try {
 
-  // Build extra context based on event type
-  let extraContext: string[] = [];
-
-  if (event.type === "agent_completion") {
-    const notification = [
-      `[Background Task Completed]`,
-      `Agent: ${event.agent} (task ${event.taskId})`,
-      `Result:`,
-      event.result.slice(0, 5000), // cap what Lin sees in the notification (full result is in thread)
-    ].join("\n");
-    extraContext = [notification];
-  } else if (event.type === "agent_failure") {
-    const notification = [
-      `[Background Task Failed]`,
-      `Agent: ${event.agent} (task ${event.taskId})`,
-      `Error: ${event.error}`,
-    ].join("\n");
-    extraContext = [notification];
-  }
-
-  // Load session history and thread
+  // Load session history
   const history = loadHistory(chatId);
+
+  // Auto-recall: inject as transient messages before the user message
+  if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
+    try {
+      const queryText = event.type === "user_message" ? event.text : event.caption;
+      const recallContext = await autoRecall(queryText);
+      if (recallContext) {
+        history.push({ role: "user", content: recallContext });
+        history.push({ role: "assistant", content: "Noted." });
+        console.log(`[bot] Auto-recall injected context for chat=${chatId}`);
+      }
+    } catch (err) {
+      console.error(`[bot] Auto-recall failed (continuing):`, err);
+    }
+  }
 
   // For user messages (text or photo), add to session history
   if (event.type === "user_message") {
@@ -539,32 +533,15 @@ async function handleEvent(
     saveMessage(chatId, storageMessage);
   } else {
     // For agent events, inject a synthetic user message so Lin can respond
+    // NOT saved to DB — agent thread is the permanent record
     const systemText =
       event.type === "agent_completion"
-        ? `[system] Background task completed: ${event.agent} (${event.taskId})\nResult: ${event.result.slice(0, 2000)}`
-        : `[system] Background task failed: ${event.agent} (${event.taskId})\nError: ${event.error}`;
+        ? `[system] Background task completed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nResult: ${event.result.slice(0, 2000)}`
+        : `[system] Background task failed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nError: ${event.error}`;
 
     const syntheticMessage: Message = { role: "user", content: systemText };
     history.push(syntheticMessage);
-    saveMessage(chatId, syntheticMessage);
-  }
-
-  // Load thread context
-  const thread = loadThread(chatId);
-  const threadContext = formatThreadForContext(thread);
-
-  // Auto-recall: find relevant past context for user messages
-  if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
-    try {
-      const queryText = event.type === "user_message" ? event.text : event.caption;
-      const recallContext = await autoRecall(queryText);
-      if (recallContext) {
-        extraContext.push(recallContext);
-        console.log(`[bot] Auto-recall injected context for chat=${chatId}`);
-      }
-    } catch (err) {
-      console.error(`[bot] Auto-recall failed (continuing):`, err);
-    }
+    // NOT saved to DB
   }
 
   // Run Lin with streaming responses
@@ -586,7 +563,7 @@ async function handleEvent(
     {
       model: config.claudeModel,
       workspace: config.workspace,
-      extraContext: [threadContext, ...extraContext],
+      extraContext: [],
     }
   );
 
@@ -620,9 +597,6 @@ async function handleEvent(
 
   // Extract reply text
   const reply = extractTextFromResponse(newMessages);
-
-  // Append Lin's response to the shared thread
-  appendToThread(chatId, "main", reply);
 
   // Post-turn: index this exchange into vector memory
   if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {

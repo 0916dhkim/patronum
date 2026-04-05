@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { AgentDef } from "./agents.js";
-import type { ThreadMessage } from "./thread.js";
 
 export interface AgentTask {
   taskId: string;
@@ -9,7 +8,8 @@ export interface AgentTask {
   task: string;
   chatId: string;
   status: "running" | "done" | "cancelled" | "failed";
-  threadSnapshot: ThreadMessage[];
+  threadId: string;
+  threadName: string;
   result?: string;
   error?: string;
   startedAt: number;
@@ -33,7 +33,8 @@ export class TaskManager {
     agentDef: AgentDef,
     task: string,
     chatId: string,
-    threadSnapshot: ThreadMessage[]
+    threadId: string,
+    threadName: string
   ): AgentTask {
     const taskId = crypto.randomUUID().slice(0, 8); // short id for readability
     const abortController = new AbortController();
@@ -45,7 +46,8 @@ export class TaskManager {
       task,
       chatId,
       status: "running",
-      threadSnapshot,
+      threadId,
+      threadName,
       startedAt: Date.now(),
       abortController,
     };

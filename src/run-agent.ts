@@ -1,7 +1,5 @@
 import { config } from "./config.js";
 import { getAgentDef, type AgentDef } from "./agents.js";
-import { loadThread, appendToThread, formatThreadForContext } from "./thread.js";
-import type { ThreadMessage } from "./thread.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import {
   logUsage,
@@ -21,10 +19,7 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 8192;
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-function buildAgentSystemPrompt(
-  agent: AgentDef,
-  threadContext: string
-): TextBlock[] {
+function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
   const system: TextBlock[] = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
@@ -34,11 +29,6 @@ function buildAgentSystemPrompt(
     system.push({ type: "text", text: agent.systemPrompt });
   }
 
-  // Include the shared thread as context
-  if (threadContext) {
-    system.push({ type: "text", text: threadContext });
-  }
-
   return system;
 }
 
@@ -46,10 +36,26 @@ async function callClaudeForAgent(
   agent: AgentDef,
   messages: Message[],
   systemPrompt: Array<{ type: "text"; text: string }>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<ClaudeResponse> {
   // Agents get tools too — they can read/write/exec
   const tools = getToolDefinitions();
+
+  const body: Record<string, unknown> = {
+    model: agent.model,
+    max_tokens: MAX_TOKENS,
+    system: prepareSystemPromptForClaude(systemPrompt),
+    tools,
+    messages: prepareMessagesForClaude(messages, {
+      cacheInitialUserMessage: true,
+    }),
+  };
+
+  // Add tool_choice if specified
+  if (toolChoice) {
+    body.tool_choice = toolChoice;
+  }
 
   const response = await fetch(API_URL, {
     method: "POST",
@@ -63,15 +69,7 @@ async function callClaudeForAgent(
       "x-app": "cli",
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model: agent.model,
-      max_tokens: MAX_TOKENS,
-      system: prepareSystemPromptForClaude(systemPrompt),
-      tools,
-      messages: prepareMessagesForClaude(messages, {
-        cacheInitialUserMessage: true,
-      }),
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -94,150 +92,39 @@ function extractFinalText(content: ContentBlock[]): string {
 }
 
 /**
- * Run a specialist agent within the shared thread context (SYNCHRONOUS version).
- *
- * 1. Loads the full thread for context
- * 2. Optionally appends a new user prompt to the thread
- * 3. Runs the agent with tool loops
- * 4. Appends only the agent's final text output to the thread
- * 5. Returns that text
+ * Run a specialist agent with a named thread context.
+ * The agent's first API call is forced to call read_agent_thread,
+ * which loads the thread live from the DB.
  */
-export async function runAgentInThread(
-  agentName: string,
-  chatId: string,
-  userPrompt?: string,
-  signal?: AbortSignal
-): Promise<string> {
-  const agent = getAgentDef(agentName);
-  if (!agent) throw new Error(`Unknown agent: ${agentName}`);
-
-  // Check abort before starting
-  if (signal?.aborted) throw new Error("Task cancelled");
-
-  // Optionally append the task/prompt to the thread
-  if (userPrompt) {
-    // The task briefing from the main agent goes to the thread as a main-agent message
-    appendToThread(chatId, "main", userPrompt);
-  }
-
-  // Load thread and format as context
-  const thread = loadThread(chatId);
-  const threadContext = formatThreadForContext(thread);
-
-  // Build system prompt with agent identity + thread context
-  const systemPrompt = buildAgentSystemPrompt(agent, threadContext);
-
-  // The agent sees the task as a user message in its conversation
-  const taskMessage = userPrompt || "Please review the conversation thread and provide your input.";
-  const messages: Message[] = [
-    { role: "user", content: taskMessage },
-  ];
-
-  // Run agent loop (with tool use)
-  let lastAssistantContent: ContentBlock[] = [];
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    // Check abort before each API call
-    if (signal?.aborted) throw new Error("Task cancelled");
-
-    const response = await callClaudeForAgent(agent, messages, systemPrompt, signal);
-    logUsage(`agent:${agent.name}`, response.usage);
-
-    const assistantMessage: Message = {
-      role: "assistant",
-      content: response.content,
-    };
-    messages.push(assistantMessage);
-    lastAssistantContent = response.content;
-
-    if (response.stop_reason !== "tool_use") {
-      break;
-    }
-
-    // Check abort before tool execution
-    if (signal?.aborted) throw new Error("Task cancelled");
-
-    // Execute tool calls
-    const toolUseBlocks = response.content.filter(
-      (b): b is ToolUseBlock => b.type === "tool_use"
-    );
-
-    const toolResults: ToolResultBlock[] = await Promise.all(
-      toolUseBlocks.map(async (block) => {
-        // Check abort before each tool
-        if (signal?.aborted) {
-          return {
-            type: "tool_result" as const,
-            tool_use_id: block.id,
-            content: "Task cancelled",
-            is_error: true,
-          };
-        }
-
-        console.log(`[agent:${agentName}:tool] ${block.name}(${JSON.stringify(block.input)})`);
-        const { result, isError } = await executeTool(
-          block.name,
-          block.input as Record<string, unknown>
-        );
-        return {
-          type: "tool_result" as const,
-          tool_use_id: block.id,
-          content: result.slice(0, 50_000),
-          is_error: isError,
-        };
-      })
-    );
-
-    // Check abort after tool execution
-    if (signal?.aborted) throw new Error("Task cancelled");
-
-    const toolResultMessage: Message = {
-      role: "user",
-      content: toolResults,
-    };
-    messages.push(toolResultMessage);
-  }
-
-  // Extract final text and append to thread
-  const finalText = extractFinalText(lastAssistantContent);
-  if (finalText) {
-    appendToThread(chatId, agentName, finalText);
-  }
-
-  return finalText || "(no response from agent)";
-}
-
-/**
- * Run a specialist agent with a pre-built thread snapshot (ASYNC version).
- * Does NOT append to the live thread — the caller (task-manager flow) handles that.
- */
-export async function runAgentWithSnapshot(
+export async function runAgentWithThread(
   agent: AgentDef,
   chatId: string,
   userPrompt: string,
-  threadSnapshot: ThreadMessage[],
+  threadId: string,
+  threadName: string,
   signal?: AbortSignal
 ): Promise<string> {
   if (signal?.aborted) throw new Error("Task cancelled");
 
-  // Format snapshot as context (not the live thread)
-  const threadContext = formatThreadForContext(threadSnapshot);
+  // Build system prompt (no thread context — it arrives via tool)
+  const systemPrompt = buildAgentSystemPrompt(agent);
 
-  // Build system prompt with agent identity + snapshot context
-  const systemPrompt = buildAgentSystemPrompt(agent, threadContext);
-
-  const messages: Message[] = [
-    { role: "user", content: userPrompt },
-  ];
+  const messages: Message[] = [{ role: "user", content: userPrompt }];
 
   let lastAssistantContent: ContentBlock[] = [];
+  let isFirstCall = true;
 
   while (true) {
     if (signal?.aborted) throw new Error("Task cancelled");
 
-    const response = await callClaudeForAgent(agent, messages, systemPrompt, signal);
+    // Force read_agent_thread on the first call
+    const toolChoice = isFirstCall
+      ? ({ type: "tool", name: "read_agent_thread" } as const)
+      : undefined;
+
+    const response = await callClaudeForAgent(agent, messages, systemPrompt, signal, toolChoice);
     logUsage(`agent:${agent.name}`, response.usage);
+    isFirstCall = false;
 
     const assistantMessage: Message = {
       role: "assistant",

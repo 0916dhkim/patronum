@@ -11,6 +11,7 @@ import { memorySearchTool, memoryWriteTool } from "../memory/index.js";
 import { selfRestartTool } from "./self-restart.js";
 import { searchTool } from "./search.js";
 import { vaultwardenTool } from "./vaultwarden.js";
+import { readAgentThreadTool, listAgentThreadsTool } from "./agent-thread-tools.js";
 
 export { setCurrentChatId, getCurrentChatId } from "./chat-context.js";
 export { setBot, setSendMediaChatId };
@@ -30,6 +31,8 @@ const tools: ToolHandler[] = [
   selfRestartTool,
   searchTool,
   vaultwardenTool,
+  readAgentThreadTool,
+  listAgentThreadsTool,
 ];
 
 const toolMap = new Map<string, ToolHandler>(
