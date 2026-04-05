@@ -40,7 +40,16 @@ async function callClaudeForAgent(
   toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<ClaudeResponse> {
   // Agents get tools too — they can read/write/exec
-  const tools = getToolDefinitions();
+  const originalTools = getToolDefinitions();
+  
+  // Clone the tools array and add cache_control to the last tool
+  const tools = originalTools.map((tool) => ({ ...tool }));
+  if (tools.length > 0) {
+    tools[tools.length - 1] = {
+      ...tools[tools.length - 1],
+      cache_control: { type: "ephemeral" },
+    };
+  }
 
   const body: Record<string, unknown> = {
     model: agent.model,

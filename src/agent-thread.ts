@@ -99,6 +99,17 @@ export function appendToAgentThread(
   ).run(id, threadId, author, content, timestamp);
 }
 
+export function getThreadMessageCount(threadId: string): number {
+  const result = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM agent_thread_messages
+       WHERE thread_id = ?`
+    )
+    .get(threadId) as { count: number } | undefined;
+
+  return result?.count ?? 0;
+}
+
 export function loadAgentThread(
   threadId: string
 ): Array<{ author: string; content: string; timestamp: number }> {

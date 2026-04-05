@@ -46,6 +46,7 @@ export interface ToolDefinition {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  cache_control?: { type: "ephemeral" };
 }
 
 export interface ClaudeResponse {

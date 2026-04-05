@@ -27,6 +27,7 @@ function ensureBlockContent(message: Message): ContentBlock[] {
 function setBreakpointOnMessage(message: PreparedMessage): PreparedMessage {
   const content = message.content.map(cloneBlock);
 
+  // Try to find and attach cache_control to the last text block
   for (let i = content.length - 1; i >= 0; i--) {
     const block = content[i];
     if (block.type === "text") {
@@ -38,8 +39,19 @@ function setBreakpointOnMessage(message: PreparedMessage): PreparedMessage {
     }
   }
 
-  // Don't create empty text blocks with cache_control — Claude API rejects them
-  // If there are no text blocks, just return the message as-is
+  // If no text block found, try to find and attach cache_control to the last tool_result block
+  for (let i = content.length - 1; i >= 0; i--) {
+    const block = content[i];
+    if (block.type === "tool_result") {
+      content[i] = {
+        ...block,
+        cache_control: { type: "ephemeral" },
+      };
+      return { role: message.role, content };
+    }
+  }
+
+  // If no text or tool_result blocks, just return the message as-is
   return { role: message.role, content };
 }
 
