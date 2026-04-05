@@ -1,8 +1,8 @@
-import { runAgent, extractTextFromResponse, CLAUDE_CODE_IDENTITY, buildSystemPrompt } from "../agent.js";
-import { executeTool, setCurrentChatId, getToolDefinitions } from "../tools/index.js";
+import { extractTextFromResponse, CLAUDE_CODE_IDENTITY, buildSystemPrompt } from "../agent.js";
+import { setCurrentChatId, getToolDefinitions } from "../tools/index.js";
 import { getAgentDef } from "../agents.js";
 import { EvalTest } from "./loader.js";
-import { createInterceptor, ToolCallEntry } from "./interceptor.js";
+import type { ToolCallEntry } from "./interceptor.js";
 import { evaluateDeterministicAssertions, AssertionResult } from "./assertions.js";
 import { gradeAssertions, GradeResult } from "./grader.js";
 import { config } from "../config.js";
@@ -33,10 +33,6 @@ export interface EvalRun {
     error: number;
   };
 }
-
-const MAX_TOOL_ITERATIONS = 20;
-
-
 
 /**
  * Make a single Claude API call without looping (for single-call eval mode).
@@ -84,10 +80,7 @@ async function makeSingleClaudeCall(
 /**
  * Run a single test in isolation.
  * 
- * Single-call mode (default): Make one API call, record tool_use blocks,
- * do not execute tools.
- * 
- * Multi-call mode: Full tool loop with mocked tool execution (for subagents).
+ * Single-call mode only: Make one API call, record tool_use blocks, do not execute tools.
  */
 export async function runTest(test: EvalTest): Promise<TestResult> {
   const startTime = Date.now();
@@ -146,107 +139,45 @@ ${test.input.mock_recall}
     // Set a fake chat ID for tools that need it
     setCurrentChatId("eval-test-" + test.name);
 
-    // Determine execution mode
-    const mode = test.mode || "single-call";
+    // Single-call mode: Make ONE Claude API call, extract tool calls, don't execute them.
+    // No tool loop, no tool result messages sent back to Claude.
+    
+    const model = agentDef?.model || config.claudeModel;
 
-    // Run in the appropriate mode
-    let result;
-    let toolCallLog: ToolCallEntry[];
-
-    if (mode === "single-call") {
-      // Single-call mode: Make ONE Claude API call, extract tool calls, don't execute them.
-      // No tool loop, no tool result messages sent back to Claude.
-      
-      const model = agentDef?.model || config.claudeModel;
-
-      let systemPrompt: Array<{ type: "text"; text: string }>;
-      if (agentDef) {
-        // For subagents, use their system prompt
-        systemPrompt = [
-          { type: "text", text: CLAUDE_CODE_IDENTITY },
-          { type: "text", text: agentDef.systemPrompt },
-        ];
-      } else {
-        // For main agent (Lin), build full system prompt
-        systemPrompt = buildSystemPrompt({});
-      }
-
-      const { content, inputTokens } = await makeSingleClaudeCall(messages, model, systemPrompt);
-
-      // Extract tool_use blocks from the response
-      const toolUseBlocks = content.filter((block): block is ToolUseBlock => block.type === "tool_use");
-
-      toolCallLog = toolUseBlocks.map((block) => ({
-        name: block.name,
-        input: block.input,
-        timestamp: Date.now(),
-        result: "(tool not executed in single-call mode)",
-      }));
-
-      // Build a result object with the response message
-      const assistantMessage: Message = {
-        role: "assistant",
-        content,
-      };
-      result = {
-        messages: [assistantMessage],
-        inputTokens,
-      };
+    let systemPrompt: Array<{ type: "text"; text: string }>;
+    if (agentDef) {
+      // For subagents, use their system prompt
+      systemPrompt = [
+        { type: "text", text: CLAUDE_CODE_IDENTITY },
+        { type: "text", text: agentDef.systemPrompt },
+      ];
     } else {
-      // Multi-call mode: full tool loop with interceptor (for subagents)
-      const interceptor = createInterceptor(executeTool, { subagentMode: !!agentDef });
-
-      try {
-        // Wrap the executor to track iterations
-        let iterations = 0;
-        const countingExecutor = async (
-          name: string,
-          input: Record<string, unknown>
-        ) => {
-          iterations++;
-          if (iterations > MAX_TOOL_ITERATIONS) {
-            throw new Error(
-              `Tool loop exceeded ${MAX_TOOL_ITERATIONS} iterations — stopping`
-            );
-          }
-          return interceptor.executor(name, input);
-        };
-
-        // Build options for runAgent
-        const agentOptions: Parameters<typeof runAgent>[1] = {
-          toolExecutor: countingExecutor,
-        };
-
-        // If testing a subagent, inject its model and system prompt
-        if (agentDef) {
-          agentOptions.model = agentDef.model;
-          agentOptions.systemPrompt = [
-            { type: "text", text: CLAUDE_CODE_IDENTITY },
-            { type: "text", text: agentDef.systemPrompt },
-          ];
-        }
-
-        result = await runAgent(messages, agentOptions);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("exceeded")) {
-          return {
-            name: test.name,
-            status: "ERROR",
-            duration_ms: Date.now() - startTime,
-            toolAssertions: [],
-            gradedAssertions: [],
-            substringAssertions: [],
-            toolCallLog: [],
-            agentResponseText: "(error: tool loop exceeded maximum iterations)",
-            error: msg,
-          };
-        }
-        throw err;
-      }
-
-      toolCallLog = interceptor.getLog();
+      // For main agent (Lin), build full system prompt
+      systemPrompt = buildSystemPrompt({});
     }
+
+    const { content, inputTokens } = await makeSingleClaudeCall(messages, model, systemPrompt);
+
+    // Extract tool_use blocks from the response
+    const toolUseBlocks = content.filter((block): block is ToolUseBlock => block.type === "tool_use");
+
+    const toolCallLog = toolUseBlocks.map((block) => ({
+      name: block.name,
+      input: block.input,
+      timestamp: Date.now(),
+      result: "(tool not executed in single-call mode)",
+    }));
+
+    // Build a result object with the response message
+    const assistantMessage: Message = {
+      role: "assistant",
+      content,
+    };
+
+    const result = {
+      messages: [assistantMessage],
+      inputTokens,
+    };
 
     // Extract response text
     const agentResponseText = extractTextFromResponse(result.messages);
