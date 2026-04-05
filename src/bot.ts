@@ -670,7 +670,14 @@ ${recallContent}
 
     // Token-based compaction
     const model = config.claudeModel;
-    const fullHistory = [...history, ...newMessages];
+    // Strip thinking blocks from newMessages before compaction/archival — same invariant as saveMessage above
+    const newMessagesStripped = newMessages.map((msg) => ({
+      ...msg,
+      content: Array.isArray(msg.content)
+        ? msg.content.filter((block) => block.type !== "thinking" && block.type !== "redacted_thinking")
+        : msg.content,
+    }));
+    const fullHistory = [...history, ...newMessagesStripped];
     const { messages: compactedHistory, compacted } = await compactIfNeeded(
       fullHistory,
       inputTokens,
