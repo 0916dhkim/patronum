@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import process from "node:process";
+import { existsSync, readFileSync } from "node:fs";
 import { initConfig, config } from "./config.js";
 import { initMemoryStore, initEmbeddings } from "./memory/index.js";
 import { loadAllTests, loadTest, filterByTags, type EvalTest } from "./eval/loader.js";
@@ -8,7 +9,21 @@ import { runAllTests, runTest } from "./eval/runner.js";
 import { saveResults, loadRecentResults } from "./eval/results.js";
 import { compareRuns } from "./eval/compare.js";
 
-async function printTestResults(testName?: string, tags?: string[]): Promise<number> {
+export interface PromptOverrides {
+  agentsMdPath?: string;
+  agentsContent?: string;
+  soulMdPath?: string;
+  soulContent?: string;
+  subagentMdPath?: string;
+  subagentContent?: string;
+  withoutSections?: string[];
+}
+
+async function printTestResults(
+  testName?: string,
+  tags?: string[],
+  overrides?: PromptOverrides
+): Promise<number> {
   let tests: EvalTest[] = [];
   let loadErrors: Array<{ file: string; message: string }> = [];
 
@@ -41,9 +56,14 @@ async function printTestResults(testName?: string, tags?: string[]): Promise<num
     return 1;
   }
 
+  // Print override banner if any overrides are active
+  if (overrides && isAnyOverrideActive(overrides)) {
+    printOverrideBanner(overrides);
+  }
+
   console.log(`Running ${tests.length} test(s)...`);
 
-  const run = await runAllTests(tests);
+  const run = await runAllTests(tests, overrides);
   const filePath = saveResults(run, testName);
 
   console.log("");
@@ -138,6 +158,76 @@ async function printComparison(): Promise<number> {
   return 0;
 }
 
+function isAnyOverrideActive(overrides: PromptOverrides): boolean {
+  return !!(
+    overrides.agentsMdPath ||
+    overrides.agentsContent ||
+    overrides.soulMdPath ||
+    overrides.soulContent ||
+    overrides.subagentMdPath ||
+    overrides.subagentContent ||
+    (overrides.withoutSections && overrides.withoutSections.length > 0)
+  );
+}
+
+function printOverrideBanner(overrides: PromptOverrides): void {
+  console.log("⚠️  PROMPT OVERRIDES ACTIVE:");
+  if (overrides.agentsMdPath) {
+    console.log(`   --agents-md: ${overrides.agentsMdPath}`);
+  }
+  if (overrides.soulMdPath) {
+    console.log(`   --soul-md: ${overrides.soulMdPath}`);
+  }
+  if (overrides.subagentMdPath) {
+    console.log(`   --subagent-md: ${overrides.subagentMdPath}`);
+  }
+  if (overrides.withoutSections && overrides.withoutSections.length > 0) {
+    for (const section of overrides.withoutSections) {
+      console.log(`   --without-section: "${section}"`);
+    }
+  }
+  console.log("");
+}
+
+function parsePromptOverrides(args: string[]): PromptOverrides {
+  const overrides: PromptOverrides = {
+    withoutSections: [],
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--agents-md" && i + 1 < args.length) {
+      const filePath = args[i + 1];
+      if (!existsSync(filePath)) {
+        throw new Error(`File not found: --agents-md ${filePath}`);
+      }
+      overrides.agentsMdPath = filePath;
+      overrides.agentsContent = readFileSync(filePath, "utf-8");
+      i++;
+    } else if (args[i] === "--soul-md" && i + 1 < args.length) {
+      const filePath = args[i + 1];
+      if (!existsSync(filePath)) {
+        throw new Error(`File not found: --soul-md ${filePath}`);
+      }
+      overrides.soulMdPath = filePath;
+      overrides.soulContent = readFileSync(filePath, "utf-8");
+      i++;
+    } else if (args[i] === "--subagent-md" && i + 1 < args.length) {
+      const filePath = args[i + 1];
+      if (!existsSync(filePath)) {
+        throw new Error(`File not found: --subagent-md ${filePath}`);
+      }
+      overrides.subagentMdPath = filePath;
+      overrides.subagentContent = readFileSync(filePath, "utf-8");
+      i++;
+    } else if (args[i] === "--without-section" && i + 1 < args.length) {
+      overrides.withoutSections!.push(args[i + 1]);
+      i++;
+    }
+  }
+
+  return overrides;
+}
+
 async function main(): Promise<number> {
   try {
     await initConfig();
@@ -152,9 +242,9 @@ async function main(): Promise<number> {
     const command = args[0] || "run";
 
     if (command === "run") {
-      // Parse remaining arguments: [test-name] [--tag tag1 [--tag tag2 ...]]
+      // Parse remaining arguments: [test-name] [--tag tag1 [--tag tag2 ...]] [--agents-md ...] etc
       const testName = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
-      
+
       // Collect --tag arguments
       const tags: string[] = [];
       for (let i = 1; i < args.length; i++) {
@@ -175,7 +265,10 @@ async function main(): Promise<number> {
         return 1;
       }
 
-      return await printTestResults(testName, tags);
+      // Parse prompt overrides
+      const overrides = parsePromptOverrides(args);
+
+      return await printTestResults(testName, tags, overrides);
     } else if (command === "compare") {
       return await printComparison();
     } else {

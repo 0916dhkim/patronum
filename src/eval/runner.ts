@@ -8,6 +8,8 @@ import { gradeAssertions, GradeResult } from "./grader.js";
 import { config } from "../config.js";
 import { prepareMessagesForClaude, prepareSystemPromptForClaude, logUsage, getTotalInputTokens } from "../prompt-cache.js";
 import type { Message, ToolUseBlock, ClaudeResponse, ContentBlock } from "../types.js";
+import { stripSection } from "./prompt-override.js";
+import type { PromptOverrides } from "../eval.js";
 
 export interface TestResult {
   name: string;
@@ -82,7 +84,7 @@ async function makeSingleClaudeCall(
  * 
  * Single-call mode only: Make one API call, record tool_use blocks, do not execute tools.
  */
-export async function runTest(test: EvalTest): Promise<TestResult> {
+export async function runTest(test: EvalTest, overrides?: PromptOverrides): Promise<TestResult> {
   const startTime = Date.now();
 
   try {
@@ -139,6 +141,21 @@ ${test.input.mock_recall}
       }
     }
 
+    // Validate override constraints
+    if (overrides?.subagentMdPath && !test.agent) {
+      return {
+        name: test.name,
+        status: "ERROR",
+        duration_ms: Date.now() - startTime,
+        toolAssertions: [],
+        gradedAssertions: [],
+        substringAssertions: [],
+        toolCallLog: [],
+        agentResponseText: "(error)",
+        error: `--subagent-md can only be used with subagent tests (tests with 'agent:' field)`,
+      };
+    }
+
     // Set a fake chat ID for tools that need it
     setCurrentChatId("eval-test-" + test.name);
 
@@ -150,13 +167,53 @@ ${test.input.mock_recall}
     let systemPrompt: Array<{ type: "text"; text: string }>;
     if (agentDef) {
       // For subagents, use their system prompt
+      let subagentSystemPrompt = agentDef.systemPrompt;
+
+      // Apply --subagent-md override if present
+      if (overrides?.subagentContent) {
+        subagentSystemPrompt = overrides.subagentContent;
+      }
+
       systemPrompt = [
         { type: "text", text: CLAUDE_CODE_IDENTITY },
-        { type: "text", text: agentDef.systemPrompt },
+        { type: "text", text: subagentSystemPrompt },
       ];
     } else {
-      // For main agent (Lin), build full system prompt
-      systemPrompt = buildSystemPrompt({});
+      // For main agent (Lin), build full system prompt with overrides
+      let agentsContent = overrides?.agentsContent;
+
+      // Apply --without-section stripping if specified
+      if (overrides?.withoutSections && overrides.withoutSections.length > 0) {
+        if (!agentsContent) {
+          // Load default AGENTS.md first if not already overridden by --agents-md
+          const { loadContextFile } = await import("../context.js");
+          agentsContent = loadContextFile(config.workspace, "AGENTS.md") || "";
+        }
+
+        // Apply each --without-section sequentially
+        try {
+          for (const section of overrides.withoutSections) {
+            agentsContent = stripSection(agentsContent, section);
+          }
+        } catch (err) {
+          return {
+            name: test.name,
+            status: "ERROR",
+            duration_ms: Date.now() - startTime,
+            toolAssertions: [],
+            gradedAssertions: [],
+            substringAssertions: [],
+            toolCallLog: [],
+            agentResponseText: "(error)",
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
+      systemPrompt = buildSystemPrompt({
+        soulContent: overrides?.soulContent,
+        agentsContent,
+      });
     }
 
     const { content, inputTokens } = await makeSingleClaudeCall(messages, model, systemPrompt);
@@ -257,9 +314,9 @@ ${test.input.mock_recall}
 /**
  * Run all tests in parallel.
  */
-export async function runAllTests(tests: EvalTest[]): Promise<EvalRun> {
+export async function runAllTests(tests: EvalTest[], overrides?: PromptOverrides): Promise<EvalRun> {
   const startTime = new Date();
-  const results = await Promise.all(tests.map(runTest));
+  const results = await Promise.all(tests.map((test) => runTest(test, overrides)));
 
   const summary = {
     total: results.length,

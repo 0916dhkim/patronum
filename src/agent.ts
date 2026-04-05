@@ -43,6 +43,10 @@ export interface AgentOptions {
   toolExecutor?: ToolExecutor;
   /** Override system prompt entirely (bypasses buildSystemPrompt) */
   systemPrompt?: Array<{ type: "text"; text: string }>;
+  /** Override SOUL.md content (eval-only) */
+  soulContent?: string;
+  /** Override AGENTS.md content (eval-only) */
+  agentsContent?: string;
 }
 
 export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
@@ -51,9 +55,9 @@ export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text";
   const system: Array<{ type: "text"; text: string }> = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
-  const soul = loadContextFile(workspace, "SOUL.md");
+  const soul = options?.soulContent ?? loadContextFile(workspace, "SOUL.md");
   if (soul) system.push({ type: "text", text: soul });
-  const agents = loadContextFile(workspace, "AGENTS.md");
+  const agents = options?.agentsContent ?? loadContextFile(workspace, "AGENTS.md");
   if (agents) system.push({ type: "text", text: agents });
   const memory = loadContextFile(workspace, "MEMORY.md");
   if (memory) system.push({ type: "text", text: `[MEMORY.md — curated persistent facts]\n\n${memory}` });
