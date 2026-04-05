@@ -8,6 +8,7 @@ export interface AgentDef {
   workspaceDir: string;
   description: string; // from SUBAGENT.md frontmatter — used for routing
   systemPrompt: string; // body of SUBAGENT.md (below frontmatter)
+  thinking?: boolean; // enable adaptive thinking for this agent
 }
 
 interface SubagentFrontmatter {
@@ -83,6 +84,9 @@ function loadAgentFiles(): ParsedSubagent[] {
       continue;
     }
 
+    // Parse thinking flag (frontmatter values are strings, treat "true" as truthy)
+    const thinking = frontmatter.thinking === "true";
+
     parsed.push({
       sourcePath: subagentPath,
       definition: {
@@ -91,6 +95,7 @@ function loadAgentFiles(): ParsedSubagent[] {
         workspaceDir: agentDir,
         description,
         systemPrompt: body,
+        thinking: thinking || undefined,
       },
     });
   }

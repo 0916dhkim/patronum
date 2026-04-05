@@ -30,7 +30,18 @@ export interface ToolResultBlock {
   cache_control?: CacheControl;
 }
 
-export type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
+export interface ThinkingBlock {
+  type: "thinking";
+  thinking: string;
+  signature: string;
+}
+
+export interface RedactedThinkingBlock {
+  type: "redacted_thinking";
+  data: string;
+}
+
+export type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | ThinkingBlock | RedactedThinkingBlock;
 
 export interface CacheControl {
   type: "ephemeral";
@@ -91,7 +102,9 @@ export interface StreamContentBlockStart {
   index: number;
   content_block:
     | { type: "text"; text: string }
-    | { type: "tool_use"; id: string; name: string; input: Record<string, never> };
+    | { type: "tool_use"; id: string; name: string; input: Record<string, never> }
+    | { type: "thinking"; thinking: string }
+    | { type: "redacted_thinking"; data: string };
 }
 
 export interface StreamContentBlockDelta {
@@ -99,7 +112,10 @@ export interface StreamContentBlockDelta {
   index: number;
   delta:
     | { type: "text_delta"; text: string }
-    | { type: "input_json_delta"; partial_json: string };
+    | { type: "input_json_delta"; partial_json: string }
+    | { type: "thinking_delta"; thinking: string }
+    | { type: "signature_delta"; signature: string }
+    | { type: "redacted_thinking"; data: string };
 }
 
 export interface StreamContentBlockStop {

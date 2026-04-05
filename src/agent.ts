@@ -19,6 +19,8 @@ import type {
   ToolResultBlock,
   StreamEvent,
   TextBlock,
+  ThinkingBlock,
+  RedactedThinkingBlock,
 } from "./types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
@@ -47,6 +49,8 @@ export interface AgentOptions {
   soulContent?: string;
   /** Override AGENTS.md content (eval-only) */
   agentsContent?: string;
+  /** Enable adaptive thinking mode */
+  thinking?: boolean;
 }
 
 export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
@@ -96,6 +100,18 @@ async function callClaude(
   const model = options?.model || config.claudeModel;
   const systemPrompt = options?.systemPrompt || buildSystemPrompt(options);
 
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: MAX_TOKENS,
+    system: prepareSystemPromptForClaude(systemPrompt),
+    tools: getToolDefinitions(),
+    messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
+  };
+
+  if (options?.thinking) {
+    body.thinking = { type: "adaptive" };
+  }
+
   const response = await fetch(API_URL, {
     method: "POST",
     headers: {
@@ -107,13 +123,7 @@ async function callClaude(
       "x-app": "cli",
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: MAX_TOKENS,
-      system: prepareSystemPromptForClaude(systemPrompt),
-      tools: getToolDefinitions(),
-      messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -134,6 +144,19 @@ async function callClaudeStreaming(
   const model = options?.model || config.claudeModel;
   const systemPrompt = options?.systemPrompt || buildSystemPrompt(options);
 
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: MAX_TOKENS,
+    system: prepareSystemPromptForClaude(systemPrompt),
+    tools: getToolDefinitions(),
+    messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
+    stream: true,
+  };
+
+  if (options?.thinking) {
+    body.thinking = { type: "adaptive" };
+  }
+
   const response = await fetch(API_URL, {
     method: "POST",
     headers: {
@@ -145,14 +168,7 @@ async function callClaudeStreaming(
       "x-app": "cli",
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: MAX_TOKENS,
-      system: prepareSystemPromptForClaude(systemPrompt),
-      tools: getToolDefinitions(),
-      messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
-      stream: true,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -248,11 +264,14 @@ export async function runAgentStreaming(
     const contentBlocks: ContentBlock[] = [];
     const toolUseBlocks: ToolUseBlock[] = []; // also tracked separately for tool execution
     let stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" = "end_turn";
-    let currentBlockType: "text" | "tool_use" | null = null;
+    let currentBlockType: "text" | "tool_use" | "thinking" | "redacted_thinking" | null = null;
     let currentTextBlockText = "";
     let currentToolUseId = "";
     let currentToolUseName = "";
     let currentToolUseInput = "";
+    let currentThinkingText = "";
+    let currentThinkingSignature = "";
+    let currentRedactedThinkingData = "";
 
     // Parse the SSE stream
     for await (const event of parseSSEStream(response, signal)) {
@@ -268,6 +287,13 @@ export async function runAgentStreaming(
           currentToolUseId = event.content_block.id;
           currentToolUseName = event.content_block.name;
           currentToolUseInput = ""; // May remain empty if tool has no params — handled at block_stop
+        } else if (event.content_block.type === "thinking") {
+          currentBlockType = "thinking";
+          currentThinkingText = "";
+          currentThinkingSignature = "";
+        } else if (event.content_block.type === "redacted_thinking") {
+          currentBlockType = "redacted_thinking";
+          currentRedactedThinkingData = event.content_block.data;
         }
       } else if (event.type === "content_block_delta") {
         if (event.delta.type === "text_delta") {
@@ -277,6 +303,12 @@ export async function runAgentStreaming(
           callbacks.onTextDelta(delta, fullAccumulatedText);
         } else if (event.delta.type === "input_json_delta") {
           currentToolUseInput += event.delta.partial_json;
+        } else if (event.delta.type === "thinking_delta") {
+          currentThinkingText += event.delta.thinking;
+        } else if (event.delta.type === "signature_delta") {
+          currentThinkingSignature += event.delta.signature;
+        } else if (event.delta.type === "redacted_thinking") {
+          currentRedactedThinkingData += event.delta.data;
         }
       } else if (event.type === "content_block_stop") {
         // Finalize the content block based on tracked type
@@ -303,6 +335,22 @@ export async function runAgentStreaming(
           currentToolUseId = "";
           currentToolUseName = "";
           currentToolUseInput = "";
+        } else if (currentBlockType === "thinking") {
+          const block: ThinkingBlock = {
+            type: "thinking",
+            thinking: currentThinkingText,
+            signature: currentThinkingSignature,
+          };
+          contentBlocks.push(block);
+          currentThinkingText = "";
+          currentThinkingSignature = "";
+        } else if (currentBlockType === "redacted_thinking") {
+          const block: RedactedThinkingBlock = {
+            type: "redacted_thinking",
+            data: currentRedactedThinkingData,
+          };
+          contentBlocks.push(block);
+          currentRedactedThinkingData = "";
         }
         currentBlockType = null;
       } else if (event.type === "message_delta") {

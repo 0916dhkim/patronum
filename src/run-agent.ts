@@ -64,6 +64,11 @@ async function callClaudeForAgent(
     body.tool_choice = toolChoice;
   }
 
+  // Add thinking if enabled for this agent
+  if (agent.thinking) {
+    body.thinking = { type: "adaptive" };
+  }
+
   const response = await fetch(API_URL, {
     method: "POST",
     headers: {

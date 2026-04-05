@@ -115,6 +115,16 @@ function messageToText(msg: Message): string {
       continue;
     }
 
+    if (block.type === "thinking") {
+      // Skip thinking blocks — don't include in compaction summaries
+      continue;
+    }
+
+    if (block.type === "redacted_thinking") {
+      // Skip redacted thinking blocks
+      continue;
+    }
+
     const status = block.is_error ? "error" : "ok";
     parts.push(
       `- Tool result (${status}): ${truncateText(normalizeWhitespace(typeof block.content === "string" ? block.content : "[image content]"), MAX_TOOL_RESULT_CHARS)}`

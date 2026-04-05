@@ -13,6 +13,8 @@ interface PreparedMessage {
 function cloneBlock(block: ContentBlock): ContentBlock {
   if (block.type === "text") return { ...block };
   if (block.type === "tool_use") return { ...block, input: { ...block.input } };
+  if (block.type === "thinking") return { ...block };
+  if (block.type === "redacted_thinking") return { ...block };
   return { ...block };
 }
 
