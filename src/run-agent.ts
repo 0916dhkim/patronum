@@ -33,6 +33,15 @@ function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
   return system;
 }
 
+// Tools that only Lin (the orchestrator) should have. Subagents must not spawn
+// other agents, restart the bot, or manage tasks — those are orchestration concerns.
+const SUBAGENT_BLOCKED_TOOLS = new Set([
+  "spawn_agent",
+  "self_restart",
+  "cancel_agent",
+  "list_tasks",
+]);
+
 async function callClaudeForAgent(
   agent: AgentDef,
   messages: Message[],
@@ -40,8 +49,10 @@ async function callClaudeForAgent(
   signal?: AbortSignal,
   toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<ClaudeResponse> {
-  // Agents get tools too — they can read/write/exec
-  const originalTools = getToolDefinitions();
+  // Agents get tools — but not orchestration tools (spawn_agent, self_restart, etc.)
+  const originalTools = getToolDefinitions().filter(
+    (t) => !SUBAGENT_BLOCKED_TOOLS.has(t.name)
+  );
   
   // Clone the tools array and add cache_control to the last tool
   const tools = originalTools.map((tool) => ({ ...tool }));
