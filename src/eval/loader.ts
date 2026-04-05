@@ -36,6 +36,7 @@ export interface EvalTest {
   description?: string;
   agent?: string;
   tags?: string[];
+  mode?: "single-call" | "multi-call";
   input: EvalTestInput;
   assertions: EvalTestAssertions;
 }
@@ -140,11 +141,21 @@ function validateTest(test: unknown, filename: string): EvalTest {
     }
   }
 
+  // Validate mode if present
+  let mode: "single-call" | "multi-call" = "single-call";
+  if (obj.mode !== undefined) {
+    if (typeof obj.mode !== "string" || !["single-call", "multi-call"].includes(obj.mode)) {
+      throw new Error(`Invalid test in ${filename}: mode must be "single-call" or "multi-call" (got "${obj.mode}")`);
+    }
+    mode = obj.mode as "single-call" | "multi-call";
+  }
+
   return {
     name: obj.name,
     description: typeof obj.description === "string" ? obj.description : undefined,
     agent,
     tags,
+    mode,
     input: {
       history,
       message: input.message,

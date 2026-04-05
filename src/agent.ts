@@ -45,7 +45,7 @@ export interface AgentOptions {
   systemPrompt?: Array<{ type: "text"; text: string }>;
 }
 
-function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
+export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
   const workspace = options?.workspace || config.workspace;
 
   const system: Array<{ type: "text"; text: string }> = [

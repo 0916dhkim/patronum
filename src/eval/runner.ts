@@ -1,11 +1,13 @@
-import { runAgent, extractTextFromResponse, CLAUDE_CODE_IDENTITY } from "../agent.js";
-import { executeTool, setCurrentChatId } from "../tools/index.js";
+import { runAgent, extractTextFromResponse, CLAUDE_CODE_IDENTITY, buildSystemPrompt } from "../agent.js";
+import { executeTool, setCurrentChatId, getToolDefinitions } from "../tools/index.js";
 import { getAgentDef } from "../agents.js";
 import { EvalTest } from "./loader.js";
 import { createInterceptor, ToolCallEntry } from "./interceptor.js";
 import { evaluateDeterministicAssertions, AssertionResult } from "./assertions.js";
 import { gradeAssertions, GradeResult } from "./grader.js";
-import type { Message } from "../types.js";
+import { config } from "../config.js";
+import { prepareMessagesForClaude, prepareSystemPromptForClaude, logUsage, getTotalInputTokens } from "../prompt-cache.js";
+import type { Message, ToolUseBlock, ClaudeResponse, ContentBlock } from "../types.js";
 
 export interface TestResult {
   name: string;
@@ -34,8 +36,58 @@ export interface EvalRun {
 
 const MAX_TOOL_ITERATIONS = 20;
 
+
+
+/**
+ * Make a single Claude API call without looping (for single-call eval mode).
+ */
+async function makeSingleClaudeCall(
+  messages: Message[],
+  model: string,
+  systemPrompt: Array<{ type: "text"; text: string }>
+): Promise<{ content: ContentBlock[]; inputTokens: number }> {
+  const API_URL = "https://api.anthropic.com/v1/messages";
+  const MAX_TOKENS = 8192;
+
+  const response = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.claudeToken}`,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "user-agent": "claude-cli/2.1.85",
+      "x-app": "cli",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: MAX_TOKENS,
+      system: prepareSystemPromptForClaude(systemPrompt),
+      tools: getToolDefinitions(),
+      messages: prepareMessagesForClaude(messages),
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Claude API error ${response.status}: ${body}`);
+  }
+
+  const data = (await response.json()) as ClaudeResponse;
+  logUsage("lin", data.usage);
+  
+  const inputTokens = getTotalInputTokens(data.usage);
+  return { content: data.content, inputTokens };
+}
+
 /**
  * Run a single test in isolation.
+ * 
+ * Single-call mode (default): Make one API call, record tool_use blocks,
+ * do not execute tools.
+ * 
+ * Multi-call mode: Full tool loop with mocked tool execution (for subagents).
  */
 export async function runTest(test: EvalTest): Promise<TestResult> {
   const startTime = Date.now();
@@ -91,66 +143,113 @@ ${test.input.mock_recall}
       }
     }
 
-    // Create interceptor (subagent mode if testing a subagent)
-    const interceptor = createInterceptor(executeTool, { subagentMode: !!agentDef });
-
     // Set a fake chat ID for tools that need it
     setCurrentChatId("eval-test-" + test.name);
 
-    // Run the agent with the intercepted executor
+    // Determine execution mode
+    const mode = test.mode || "single-call";
+
+    // Run in the appropriate mode
     let result;
-    try {
-      // Wrap the executor to track iterations
-      let iterations = 0;
-      const countingExecutor = async (
-        name: string,
-        input: Record<string, unknown>
-      ) => {
-        iterations++;
-        if (iterations > MAX_TOOL_ITERATIONS) {
-          throw new Error(
-            `Tool loop exceeded ${MAX_TOOL_ITERATIONS} iterations — stopping`
-          );
-        }
-        return interceptor.executor(name, input);
-      };
+    let toolCallLog: ToolCallEntry[];
 
-      // Build options for runAgent
-      const agentOptions: Parameters<typeof runAgent>[1] = {
-        toolExecutor: countingExecutor,
-      };
+    if (mode === "single-call") {
+      // Single-call mode: Make ONE Claude API call, extract tool calls, don't execute them.
+      // No tool loop, no tool result messages sent back to Claude.
+      
+      const model = agentDef?.model || config.claudeModel;
 
-      // If testing a subagent, inject its model and system prompt
+      let systemPrompt: Array<{ type: "text"; text: string }>;
       if (agentDef) {
-        agentOptions.model = agentDef.model;
-        agentOptions.systemPrompt = [
+        // For subagents, use their system prompt
+        systemPrompt = [
           { type: "text", text: CLAUDE_CODE_IDENTITY },
           { type: "text", text: agentDef.systemPrompt },
         ];
+      } else {
+        // For main agent (Lin), build full system prompt
+        systemPrompt = buildSystemPrompt({});
       }
 
-      result = await runAgent(messages, agentOptions);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("exceeded")) {
-        return {
-          name: test.name,
-          status: "ERROR",
-          duration_ms: Date.now() - startTime,
-          toolAssertions: [],
-          gradedAssertions: [],
-          substringAssertions: [],
-          toolCallLog: interceptor.getLog(),
-          agentResponseText: "(error: tool loop exceeded maximum iterations)",
-          error: msg,
+      const { content, inputTokens } = await makeSingleClaudeCall(messages, model, systemPrompt);
+
+      // Extract tool_use blocks from the response
+      const toolUseBlocks = content.filter((block): block is ToolUseBlock => block.type === "tool_use");
+
+      toolCallLog = toolUseBlocks.map((block) => ({
+        name: block.name,
+        input: block.input,
+        timestamp: Date.now(),
+        result: "(tool not executed in single-call mode)",
+      }));
+
+      // Build a result object with the response message
+      const assistantMessage: Message = {
+        role: "assistant",
+        content,
+      };
+      result = {
+        messages: [assistantMessage],
+        inputTokens,
+      };
+    } else {
+      // Multi-call mode: full tool loop with interceptor (for subagents)
+      const interceptor = createInterceptor(executeTool, { subagentMode: !!agentDef });
+
+      try {
+        // Wrap the executor to track iterations
+        let iterations = 0;
+        const countingExecutor = async (
+          name: string,
+          input: Record<string, unknown>
+        ) => {
+          iterations++;
+          if (iterations > MAX_TOOL_ITERATIONS) {
+            throw new Error(
+              `Tool loop exceeded ${MAX_TOOL_ITERATIONS} iterations — stopping`
+            );
+          }
+          return interceptor.executor(name, input);
         };
+
+        // Build options for runAgent
+        const agentOptions: Parameters<typeof runAgent>[1] = {
+          toolExecutor: countingExecutor,
+        };
+
+        // If testing a subagent, inject its model and system prompt
+        if (agentDef) {
+          agentOptions.model = agentDef.model;
+          agentOptions.systemPrompt = [
+            { type: "text", text: CLAUDE_CODE_IDENTITY },
+            { type: "text", text: agentDef.systemPrompt },
+          ];
+        }
+
+        result = await runAgent(messages, agentOptions);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("exceeded")) {
+          return {
+            name: test.name,
+            status: "ERROR",
+            duration_ms: Date.now() - startTime,
+            toolAssertions: [],
+            gradedAssertions: [],
+            substringAssertions: [],
+            toolCallLog: [],
+            agentResponseText: "(error: tool loop exceeded maximum iterations)",
+            error: msg,
+          };
+        }
+        throw err;
       }
-      throw err;
+
+      toolCallLog = interceptor.getLog();
     }
 
     // Extract response text
     const agentResponseText = extractTextFromResponse(result.messages);
-    const toolCallLog = interceptor.getLog();
 
     // Evaluate deterministic assertions
     const deterministicResults = evaluateDeterministicAssertions(
