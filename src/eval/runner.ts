@@ -169,7 +169,7 @@ ${test.input.mock_recall}
       let subagentSystemPrompt = agentDef.systemPrompt;
 
       // Apply --subagent-md override if present
-      if (overrides?.subagentContent) {
+      if (overrides?.subagentContent !== undefined) {
         subagentSystemPrompt = overrides.subagentContent;
       }
 

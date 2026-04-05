@@ -40,6 +40,124 @@ export interface EvalTest {
   assertions: EvalTestAssertions;
 }
 
+/**
+ * Resolve fixture references in history content blocks.
+ * For each type: "image" block where source.type === "fixture":
+ * - Validate the fixture path (no ".." or leading "/")
+ * - Resolve to tests/fixtures/<path>
+ * - Check file exists
+ * - Detect media type from extension
+ * - Read and base64-encode the file
+ * - Replace source with { type: "base64", media_type, data: <base64> }
+ * 
+ * Walks two nesting levels:
+ * 1. Top-level image blocks in history entries
+ * 2. Image blocks nested inside tool_result content arrays
+ */
+function resolveFixtures(history: Array<{ role: string; content: ContentBlock }> | undefined, filename: string): void {
+  if (!history) {
+    return;
+  }
+
+  for (const entry of history) {
+    // Handle content that is an array of content blocks
+    if (Array.isArray(entry.content)) {
+      resolveFixturesInContentArray(entry.content, filename);
+    }
+  }
+}
+
+function resolveFixturesInContentArray(
+  content: Array<{
+    type: string;
+    text?: string;
+    source?: unknown;
+    tool_use_id?: string;
+    content?: Array<unknown>;
+    [key: string]: unknown;
+  }>,
+  filename: string
+): void {
+  for (let i = 0; i < content.length; i++) {
+    const block = content[i];
+
+    // Handle top-level image blocks
+    if (block.type === "image") {
+      resolveFixtureInImageBlock(block as any, filename);
+    }
+
+    // Handle tool_result blocks with nested content
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      for (let j = 0; j < block.content.length; j++) {
+        const innerBlock = block.content[j] as any;
+        if (innerBlock?.type === "image") {
+          resolveFixtureInImageBlock(innerBlock, filename);
+        }
+      }
+    }
+  }
+}
+
+function resolveFixtureInImageBlock(
+  block: any,
+  filename: string
+): void {
+  const source = block.source;
+  if (!source || source.type !== "fixture") {
+    return;
+  }
+
+  const fixturePath = source.path;
+  if (!fixturePath || typeof fixturePath !== "string") {
+    throw new Error(`Invalid fixture path in ${filename}: path must be a non-empty string`);
+  }
+
+  // Validate: no ".." or leading "/"
+  if (fixturePath.includes("..") || fixturePath.startsWith("/")) {
+    throw new Error(`Fixture path must be relative and cannot contain '..': ${fixturePath}`);
+  }
+
+  // Resolve to tests/fixtures/<path>
+  const fullPath = path.join(config.workspace, "tests", "fixtures", fixturePath);
+
+  // Check file exists
+  if (!existsSync(fullPath)) {
+    throw new Error(`Fixture not found: ${fixturePath} (in ${filename})`);
+  }
+
+  // Detect media type from extension
+  const ext = path.extname(fixturePath).toLowerCase();
+  let mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+
+  switch (ext) {
+    case ".png":
+      mediaType = "image/png";
+      break;
+    case ".jpg":
+    case ".jpeg":
+      mediaType = "image/jpeg";
+      break;
+    case ".gif":
+      mediaType = "image/gif";
+      break;
+    case ".webp":
+      mediaType = "image/webp";
+      break;
+    default:
+      throw new Error(`Unsupported fixture extension: ${ext} (in ${filename})`);
+  }
+
+  // Read and base64-encode
+  const data = readFileSync(fullPath, "base64");
+
+  // Replace source
+  block.source = {
+    type: "base64",
+    media_type: mediaType,
+    data: data,
+  };
+}
+
 function validateTest(test: unknown, filename: string): EvalTest {
   if (typeof test !== "object" || test === null) {
     throw new Error(`Invalid test in ${filename}: expected object`);
@@ -139,6 +257,9 @@ function validateTest(test: unknown, filename: string): EvalTest {
       tags.push(tag);
     }
   }
+
+  // Resolve fixture references in history
+  resolveFixtures(history, filename);
 
   return {
     name: obj.name,
