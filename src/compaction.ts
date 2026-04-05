@@ -117,7 +117,7 @@ function messageToText(msg: Message): string {
 
     const status = block.is_error ? "error" : "ok";
     parts.push(
-      `- Tool result (${status}): ${truncateText(normalizeWhitespace(block.content), MAX_TOOL_RESULT_CHARS)}`
+      `- Tool result (${status}): ${truncateText(normalizeWhitespace(typeof block.content === "string" ? block.content : "[image content]"), MAX_TOOL_RESULT_CHARS)}`
     );
   }
   return parts.join("\n");

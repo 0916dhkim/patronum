@@ -3,8 +3,22 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { config } from "../config.js";
 
+// Content blocks that can appear in test history
+export type ContentBlock =
+  | string
+  | Array<
+      | { type: "text"; text: string }
+      | { type: "image"; source: { type: "base64"; media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } }
+      | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+      | {
+          type: "tool_result";
+          tool_use_id: string;
+          content: Array<{ type: "image"; source: { type: "base64"; media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } }>;
+        }
+    >;
+
 export interface EvalTestInput {
-  history?: Array<{ role: "user" | "assistant"; content: string }>;
+  history?: Array<{ role: "user" | "assistant"; content: ContentBlock }>;
   message: string;
   mock_recall?: string;
 }
@@ -49,7 +63,7 @@ function validateTest(test: unknown, filename: string): EvalTest {
   }
 
   // Validate history if present
-  let history: Array<{ role: "user" | "assistant"; content: string }> | undefined;
+  let history: Array<{ role: "user" | "assistant"; content: ContentBlock }> | undefined;
   if (input.history !== undefined) {
     if (!Array.isArray(input.history)) {
       throw new Error(`Invalid test in ${filename}: input.history must be an array`);
@@ -67,14 +81,25 @@ function validateTest(test: unknown, filename: string): EvalTest {
         throw new Error(`Invalid test in ${filename}: input.history[${i}].role must be "user" or "assistant"`);
       }
 
-      if (!h.content || typeof h.content !== "string") {
-        throw new Error(`Invalid test in ${filename}: input.history[${i}].content must be a string`);
+      // Content can be a string or an array of content blocks
+      if (h.content === undefined) {
+        throw new Error(`Invalid test in ${filename}: input.history[${i}].content is required`);
       }
 
-      history.push({
-        role: h.role as "user" | "assistant",
-        content: h.content,
-      });
+      // Accept string or array content
+      if (typeof h.content === "string") {
+        history.push({
+          role: h.role as "user" | "assistant",
+          content: h.content,
+        });
+      } else if (Array.isArray(h.content)) {
+        history.push({
+          role: h.role as "user" | "assistant",
+          content: h.content as ContentBlock,
+        });
+      } else {
+        throw new Error(`Invalid test in ${filename}: input.history[${i}].content must be a string or array`);
+      }
     }
   }
 
