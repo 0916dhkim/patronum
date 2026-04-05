@@ -491,48 +491,78 @@ async function handleEvent(
   // Load session history
   const history = loadHistory(chatId);
 
-  // Auto-recall: inject as transient messages before the user message
-  if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
-    try {
-      const queryText = event.type === "user_message" ? event.text : event.caption;
-      const recallContext = await autoRecall(queryText);
-      if (recallContext) {
-        history.push({ role: "user", content: recallContext });
-        history.push({ role: "assistant", content: "Noted." });
-        console.log(`[bot] Auto-recall injected context for chat=${chatId}`);
-      }
-    } catch (err) {
-      console.error(`[bot] Auto-recall failed (continuing):`, err);
-    }
-  }
-
   // For user messages (text or photo), add to session history
   if (event.type === "user_message") {
-    const userMessage: Message = { role: "user", content: event.text };
+    // Auto-recall: try to retrieve relevant memory context
+    let recallContent: string | null = null;
+    if (config.voyageApiKey) {
+      recallContent = await autoRecall(event.text);
+    }
+
+    let messageContent = event.text;
+    if (recallContent) {
+      // Augment the message with memory context
+      messageContent = `${event.text}
+
+<memory_context>
+Automatically retrieved memory fragments that may be relevant to this message.
+These are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.
+
+${recallContent}
+</memory_context>`;
+    }
+
+    // Push augmented version to history (in-memory for this turn)
+    const userMessage: Message = { role: "user", content: messageContent };
     history.push(userMessage);
-    saveMessage(chatId, userMessage);
+
+    // Save original text to DB (not augmented)
+    const storageMessage: Message = { role: "user", content: event.text };
+    saveMessage(chatId, storageMessage);
   } else if (event.type === "user_photo") {
+    // Auto-recall: try to retrieve relevant memory context
+    let recallContent: string | null = null;
+    if (config.voyageApiKey) {
+      recallContent = await autoRecall(event.caption);
+    }
+
     // Build vision message with image + caption for Claude
+    const contentArray: any[] = [
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: event.mediaType,
+          data: event.imageBase64,
+        },
+      },
+      {
+        type: "text",
+        text: event.caption,
+      },
+    ];
+
+    // If recall returned content, add it as an additional text block
+    if (recallContent) {
+      contentArray.push({
+        type: "text",
+        text: `<memory_context>
+Automatically retrieved memory fragments that may be relevant to this message.
+These are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.
+
+${recallContent}
+</memory_context>`,
+      });
+    }
+
     const visionMessage: Message = {
       role: "user",
-      content: [
-        {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: event.mediaType,
-            data: event.imageBase64,
-          },
-        },
-        {
-          type: "text",
-          text: event.caption,
-        },
-      ],
+      content: contentArray,
     };
-    // Push full vision message (with image) to in-memory history for this turn
+    // Push full vision message (with image and optional recall) to in-memory history for this turn
     history.push(visionMessage);
-    // Save only caption text to SQLite — don't persist image bytes
+
+    // Save only caption text to SQLite — don't persist image bytes or recall context
     const storageMessage: Message = { role: "user", content: event.caption };
     saveMessage(chatId, storageMessage);
   } else {
