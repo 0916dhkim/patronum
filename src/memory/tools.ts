@@ -7,8 +7,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { embedQuery } from "./embeddings.js";
-import { searchChunks, getChunkCount } from "./store.js";
+import { searchChunks, getChunkCount, getChunkById } from "./store.js";
 import { indexFact } from "./recall.js";
+import { getAdjacentMessages } from "../session.js";
 import { config } from "../config.js";
 import type { ToolHandler } from "../types.js";
 
@@ -154,5 +155,54 @@ export const memoryWriteTool: ToolHandler = {
     await indexFact("system", fact);
 
     return `Saved to MEMORY.md${section ? ` (section: ${section})` : ""} and indexed for search.`;
+  },
+};
+
+export const memoryFetchContextTool: ToolHandler = {
+  definition: {
+    name: "memory_fetch_context",
+    description:
+      "Fetch the conversation surrounding a recalled memory chunk. " +
+      "Use this when a memory_search result looks relevant but you need temporal context " +
+      "to judge whether it's still current.",
+    input_schema: {
+      type: "object",
+      properties: {
+        chunk_id: {
+          type: "number",
+          description: "The chunk ID from a previous memory_search result (required)",
+        },
+        window: {
+          type: "number",
+          description: "Number of messages to fetch before/after the chunk (default: 3, max: 10)",
+        },
+      },
+      required: ["chunk_id"],
+    },
+  },
+
+  async execute(input: Record<string, unknown>): Promise<string> {
+    const chunkId = input.chunk_id as number;
+    const window = Math.min((input.window as number) || 3, 10);
+
+    // Look up the chunk
+    const chunk = getChunkById(chunkId);
+    if (!chunk) {
+      return `Chunk #${chunkId} not found in memory.`;
+    }
+
+    // Fetch adjacent messages
+    const messages = getAdjacentMessages(chunk.chatId, chunk.createdAt, window);
+
+    if (!messages) {
+      return `Messages around this chunk have been compacted and are no longer available. The memory chunk (from ${chunk.createdAt}) is: "${chunk.chunkText}"`;
+    }
+
+    // Format as a compact transcript with timestamps
+    const transcript = messages
+      .map((msg) => `[${msg.createdAt}] ${msg.role === "user" ? "User" : "Assistant"}: ${msg.text}`)
+      .join("\n\n");
+
+    return `Context around memory chunk #${chunkId} (from ${chunk.createdAt}):\n\n${transcript}`;
   },
 };

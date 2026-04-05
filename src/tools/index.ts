@@ -7,7 +7,7 @@ import { sendMediaTool, setBot, setSendMediaChatId } from "./send-media.js";
 import { spawnAgentTool, setSpawnCallback } from "./spawn-agent.js";
 import { cancelAgentTool } from "./cancel-agent.js";
 import { listTasksTool } from "./list-tasks.js";
-import { memorySearchTool, memoryWriteTool } from "../memory/index.js";
+import { memorySearchTool, memoryWriteTool, memoryFetchContextTool } from "../memory/index.js";
 import { selfRestartTool } from "./self-restart.js";
 import { searchTool } from "./search.js";
 import { vaultwardenTool } from "./vaultwarden.js";
@@ -28,6 +28,7 @@ const tools: ToolHandler[] = [
   listTasksTool,
   memorySearchTool,
   memoryWriteTool,
+  memoryFetchContextTool,
   selfRestartTool,
   searchTool,
   vaultwardenTool,

@@ -124,3 +124,110 @@ export function replaceHistory(chatId: string, messages: Message[]): void {
 
   replaceAll();
 }
+
+/**
+ * Extract text content from a message's content_json.
+ * Handles both string and array of content blocks.
+ */
+function extractTextContent(contentJson: string): string {
+  try {
+    const content = JSON.parse(contentJson);
+
+    if (typeof content === "string") {
+      return content;
+    }
+
+    if (Array.isArray(content)) {
+      const textParts: string[] = [];
+      for (const block of content) {
+        if (block.type === "text") {
+          textParts.push(block.text);
+        }
+      }
+      return textParts.join("\n");
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+export interface AdjacentMessage {
+  role: "user" | "assistant";
+  text: string;
+  createdAt: string;
+}
+
+/**
+ * Find the message with created_at closest to (but not after) the given timestamp,
+ * then fetch window messages before and after by id order.
+ * Filters to user/assistant roles with text content only.
+ * Returns null if no messages found or time gap > 5 minutes.
+ * Truncates message text to 500 chars.
+ */
+export function getAdjacentMessages(
+  chatId: string,
+  chunkTimestamp: string,
+  window: number = 3
+): AdjacentMessage[] | null {
+  // Find the closest message by created_at (at or before chunk timestamp)
+  const anchorMsg = db
+    .prepare(
+      `SELECT id, created_at FROM messages
+       WHERE chat_id = ? AND created_at <= ?
+       ORDER BY created_at DESC
+       LIMIT 1`
+    )
+    .get(chatId, chunkTimestamp) as { id: number; created_at: string } | undefined;
+
+  if (!anchorMsg) {
+    // No messages found around this timestamp
+    return null;
+  }
+
+  // Check time gap - if anchor message is >5 minutes from chunk, don't return misleading context
+  const chunkTime = new Date(chunkTimestamp).getTime();
+  const anchorTime = new Date(anchorMsg.created_at).getTime();
+  const gapMs = Math.abs(chunkTime - anchorTime);
+  const gapMinutes = gapMs / (1000 * 60);
+
+  if (gapMinutes > 5) {
+    return null;
+  }
+
+  // Fetch window messages before and after by id order
+  const messages = db
+    .prepare(
+      `SELECT id, role, content_json, created_at FROM messages
+       WHERE chat_id = ? AND id >= ? - ? AND id <= ? + ?
+       ORDER BY id ASC`
+    )
+    .all(chatId, anchorMsg.id, window, anchorMsg.id, window) as Array<{
+      id: number;
+      role: string;
+      content_json: string;
+      created_at: string;
+    }>;
+
+  if (messages.length === 0) {
+    return null;
+  }
+
+  // Filter to user/assistant roles with text content, truncate to 500 chars
+  const result: AdjacentMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === "user" || msg.role === "assistant") {
+      const text = extractTextContent(msg.content_json);
+      if (text.trim()) {
+        result.push({
+          role: msg.role as "user" | "assistant",
+          text: text.length > 500 ? text.substring(0, 500) + "…" : text,
+          createdAt: msg.created_at,
+        });
+      }
+    }
+  }
+
+  return result.length > 0 ? result : null;
+}

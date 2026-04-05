@@ -177,3 +177,23 @@ export function getChunkCount(): number {
   const row = db.prepare(`SELECT COUNT(*) as count FROM memory_chunks`).get() as { count: number };
   return row.count;
 }
+
+export interface ChunkMetadata {
+  chatId: string;
+  chunkText: string;
+  createdAt: string;
+}
+
+/**
+ * Look up a chunk by ID.
+ * Returns metadata needed for adjacent message fetch, or null if not found.
+ */
+export function getChunkById(chunkId: number): ChunkMetadata | null {
+  const chunk = db
+    .prepare(
+      `SELECT chat_id, chunk_text, created_at FROM memory_chunks WHERE id = ?`
+    )
+    .get(chunkId) as ChunkMetadata | undefined;
+
+  return chunk ?? null;
+}
