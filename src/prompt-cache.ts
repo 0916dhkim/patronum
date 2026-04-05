@@ -18,6 +18,10 @@ function cloneBlock(block: ContentBlock): ContentBlock {
   return { ...block };
 }
 
+function stripThinkingBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  return blocks.filter((block) => block.type !== "thinking" && block.type !== "redacted_thinking");
+}
+
 function ensureBlockContent(message: Message): ContentBlock[] {
   if (typeof message.content === "string") {
     return [{ type: "text", text: message.content }];
@@ -78,6 +82,14 @@ export function prepareMessagesForClaude(
 
   const breakpointIndexes = new Set<number>();
   const completedPrefixLength = options.completedPrefixLength ?? 0;
+
+  // Strip thinking blocks from historical prefix (loaded from DB)
+  // Messages indices 0 to completedPrefixLength-1 are from history; the rest are current tool loop
+  if (completedPrefixLength > 0) {
+    for (let i = 0; i < completedPrefixLength && i < prepared.length; i++) {
+      prepared[i].content = stripThinkingBlocks(prepared[i].content);
+    }
+  }
 
   if (completedPrefixLength > 0 && completedPrefixLength <= prepared.length) {
     breakpointIndexes.add(completedPrefixLength - 1);

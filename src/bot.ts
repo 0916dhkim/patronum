@@ -657,8 +657,15 @@ ${recallContent}
     const { messages: newMessages, inputTokens } = agentResult;
 
     // Save all new messages to session history
+    // Strip thinking blocks before persistence — they are ephemeral to the current tool loop
     for (const msg of newMessages) {
-      saveMessage(chatId, msg);
+      const messageToPersist: Message = {
+        ...msg,
+        content: Array.isArray(msg.content)
+          ? msg.content.filter((block) => block.type !== "thinking" && block.type !== "redacted_thinking")
+          : msg.content,
+      };
+      saveMessage(chatId, messageToPersist);
     }
 
     // Token-based compaction
