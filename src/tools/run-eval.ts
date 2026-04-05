@@ -19,6 +19,10 @@ export const runEvalTool: ToolHandler = {
           type: "string",
           description: "Optional path to override the agent's SUBAGENT.md (for ablation runs)",
         },
+        agents_md: {
+          type: "string",
+          description: "Optional path to override the agents file (for ablation runs)",
+        },
       },
       required: ["test"],
     },
@@ -27,10 +31,14 @@ export const runEvalTool: ToolHandler = {
   async execute(input): Promise<string> {
     const testName = input.test as string;
     const subagentMd = input.subagent_md as string | undefined;
+    const agentsMd = input.agents_md as string | undefined;
 
     const args = ["run", testName];
     if (subagentMd) {
       args.push("--subagent-md", subagentMd);
+    }
+    if (agentsMd) {
+      args.push("--agents-md", agentsMd);
     }
 
     return new Promise((resolve) => {
