@@ -133,6 +133,13 @@ export class TaskManager {
   }
 
   /**
+   * Get all running tasks across all chats.
+   */
+  getAllRunning(): AgentTask[] {
+    return Array.from(this.tasks.values()).filter((t) => t.status === "running");
+  }
+
+  /**
    * Remove finished tasks older than TASK_TTL_MS.
    */
   private cleanupOldTasks(): void {

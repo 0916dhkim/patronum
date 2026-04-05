@@ -68,6 +68,46 @@ export class DraftStreamer {
   }
 
   /**
+   * Finalize the draft as a real message (for graceful shutdown).
+   * If there's accumulated text, sends it with an interruption notice.
+   * If no text, sends just the interruption notice.
+   * Uses the same sendMessageSafe pattern as regular sends: try HTML, fall back to plain text on send failure.
+   */
+  async finalize(): Promise<void> {
+    this.stop(); // Clear any pending flush timer
+
+    const accumulatedText = this.pendingText || this.lastSentText;
+
+    // Build message: accumulated text + interruption notice
+    let messageText = "";
+    if (accumulatedText) {
+      messageText = `${accumulatedText}\n\n⚠️ _Response interrupted — restarting_`;
+    } else {
+      messageText = "⚠️ _Response interrupted — restarting_";
+    }
+
+    // Try HTML first (like sendMessageSafe pattern)
+    let text = messageText;
+    try {
+      text = markdownToTelegramHtml(messageText);
+      try {
+        await this.bot.telegram.sendMessage(this.chatId, text, { parse_mode: "HTML" });
+        return;
+      } catch {
+        // HTML send failed, retry with plain text
+        await this.bot.telegram.sendMessage(this.chatId, messageText);
+      }
+    } catch (err) {
+      // Markdown conversion failed, try plain text
+      try {
+        await this.bot.telegram.sendMessage(this.chatId, messageText);
+      } catch (e2) {
+        console.warn("[draft] finalize: Failed to send finalization message:", e2);
+      }
+    }
+  }
+
+  /**
    * Actually send the draft to Telegram.
    * Converts markdown to Telegram HTML before sending.
    * Falls back to raw text if conversion fails on partial markdown.

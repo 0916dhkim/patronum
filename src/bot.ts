@@ -33,6 +33,10 @@ interface ChatState {
 
 const chatStates = new Map<string, ChatState>();
 
+// Track active stream controllers for graceful shutdown
+const activeStreamControllers = new Set<AbortController>();
+let isShuttingDown = false;
+
 function getChatState(chatId: string): ChatState {
   let state = chatStates.get(chatId);
   if (!state) {
@@ -333,10 +337,43 @@ export async function startBot(): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`[patronum] Received ${signal}, shutting down...`);
 
-    // Cancel all running tasks
+    // Set flag to prevent new event processing from starting
+    isShuttingDown = true;
+
+    // Abort all active streams with a hard ceiling of 5 seconds
+    console.log(`[patronum] Aborting ${activeStreamControllers.size} active stream(s)...`);
+    for (const controller of activeStreamControllers) {
+      controller.abort();
+    }
+
+    // Cancel all running spawned tasks via task manager
+    console.log("[patronum] Cancelling running spawned tasks...");
+    const runningTasks = taskManager.getAllRunning();
+    for (const task of runningTasks) {
+      taskManager.cancel(task.taskId);
+    }
+
+    // Clear all chat queues to prevent new processing
     for (const [, state] of chatStates) {
-      // No need to process completions on shutdown
       state.queue = [];
+    }
+
+    // Wait up to 5 seconds for active streams to finalize
+    const shutdownTimeoutMs = 5000;
+    const shutdownStart = Date.now();
+
+    // Poll for active streams to clear
+    let waitTime = 0;
+    const pollInterval = 100; // Check every 100ms
+    while (activeStreamControllers.size > 0 && waitTime < shutdownTimeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      waitTime = Date.now() - shutdownStart;
+    }
+
+    if (activeStreamControllers.size > 0) {
+      console.warn(`[patronum] Timeout waiting for ${activeStreamControllers.size} stream(s) to finalize`);
+    } else {
+      console.log("[patronum] All streams finalized successfully");
     }
 
     // Send offline message BEFORE stopping bot, with 2-second timeout
@@ -479,12 +516,22 @@ async function handleEvent(
   chatId: string,
   bot: Telegraf,
 ): Promise<void> {
+  // Prevent new event processing if we're shutting down
+  if (isShuttingDown) {
+    console.log(`[handleEvent] Skipping event during shutdown`);
+    return;
+  }
+
   // Ensure tools point to correct chat
   setCurrentChatId(chatId);
   setSendMediaChatId(chatId);
 
   // Show typing indicator — keepalive loop so it persists for long turns
   const stopTyping = startTypingIndicator(bot, chatId);
+
+  // Create an AbortController for this stream and track it
+  const streamController = new AbortController();
+  activeStreamControllers.add(streamController);
 
   try {
 
@@ -581,74 +628,90 @@ ${recallContent}
   // Run Lin with streaming responses
   const draftStreamer = new DraftStreamer(bot, chatId);
 
-  const agentResult = await runAgentStreaming(
-    history,
-    {
-      onTextDelta: (_delta: string, fullText: string) => {
-        draftStreamer.update(fullText);
+  try {
+    const agentResult = await runAgentStreaming(
+      history,
+      {
+        onTextDelta: (_delta: string, fullText: string) => {
+          draftStreamer.update(fullText);
+        },
+        onToolStart: (toolName: string) => {
+          console.log(`[stream] Tool starting: ${toolName}`);
+        },
+        onToolEnd: (toolName: string) => {
+          console.log(`[stream] Tool completed: ${toolName}`);
+        },
       },
-      onToolStart: (toolName: string) => {
-        console.log(`[stream] Tool starting: ${toolName}`);
+      {
+        model: config.claudeModel,
+        workspace: config.workspace,
+        thinking: true,
+        // extraContext is no longer used — thread context arrives via tool, not system prompt
       },
-      onToolEnd: (toolName: string) => {
-        console.log(`[stream] Tool completed: ${toolName}`);
-      },
-    },
-    {
-      model: config.claudeModel,
-      workspace: config.workspace,
-      thinking: true,
-      // extraContext is no longer used — thread context arrives via tool, not system prompt
+      streamController.signal
+    );
+
+    // Stop the draft streamer before sending the final message
+    draftStreamer.stop();
+
+    const { messages: newMessages, inputTokens } = agentResult;
+
+    // Save all new messages to session history
+    for (const msg of newMessages) {
+      saveMessage(chatId, msg);
     }
-  );
 
-  // Stop the draft streamer before sending the final message
-  draftStreamer.stop();
+    // Token-based compaction
+    const model = config.claudeModel;
+    const fullHistory = [...history, ...newMessages];
+    const { messages: compactedHistory, compacted } = await compactIfNeeded(
+      fullHistory,
+      inputTokens,
+      model
+    );
+    if (compacted) {
+      // Archive the messages that will be replaced (everything not in the compacted set)
+      // The compacted set starts with a summary + ack, so the original messages being
+      // summarized are everything before the kept tail in fullHistory.
+      // Archive the entire pre-compaction history so nothing is lost.
+      archiveMessages(chatId, fullHistory, "70% context window");
+      replaceHistory(chatId, compactedHistory);
+      history.splice(0, history.length, ...compactedHistory);
+    }
 
-  const { messages: newMessages, inputTokens } = agentResult;
+    // Extract reply text
+    const reply = extractTextFromResponse(newMessages);
 
-  // Save all new messages to session history
-  for (const msg of newMessages) {
-    saveMessage(chatId, msg);
-  }
+    // Post-turn: index this exchange into vector memory
+    if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
+      // Fire-and-forget — don't block the reply
+      const exchangeText = event.type === "user_message" ? event.text : event.caption;
+      indexExchange(chatId, exchangeText, newMessages).catch((err) => {
+        console.error(`[bot] Failed to index exchange:`, err);
+      });
+    }
 
-  // Token-based compaction
-  const model = config.claudeModel;
-  const fullHistory = [...history, ...newMessages];
-  const { messages: compactedHistory, compacted } = await compactIfNeeded(
-    fullHistory,
-    inputTokens,
-    model
-  );
-  if (compacted) {
-    // Archive the messages that will be replaced (everything not in the compacted set)
-    // The compacted set starts with a summary + ack, so the original messages being
-    // summarized are everything before the kept tail in fullHistory.
-    // Archive the entire pre-compaction history so nothing is lost.
-    archiveMessages(chatId, fullHistory, "70% context window");
-    replaceHistory(chatId, compactedHistory);
-    history.splice(0, history.length, ...compactedHistory);
-  }
-
-  // Extract reply text
-  const reply = extractTextFromResponse(newMessages);
-
-  // Post-turn: index this exchange into vector memory
-  if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
-    // Fire-and-forget — don't block the reply
-    const exchangeText = event.type === "user_message" ? event.text : event.caption;
-    indexExchange(chatId, exchangeText, newMessages).catch((err) => {
-      console.error(`[bot] Failed to index exchange:`, err);
-    });
-  }
-
-  // Send to Telegram
-  const chunks = splitMessage(reply);
-  for (const chunk of chunks) {
-    await sendMessageSafe(bot, chatId, chunk);
+    // Send to Telegram
+    const chunks = splitMessage(reply);
+    for (const chunk of chunks) {
+      await sendMessageSafe(bot, chatId, chunk);
+    }
+  } catch (err) {
+    // Check if this is an abort (graceful shutdown)
+    // Check the signal itself, not error message, since AbortError from fetch may have different message
+    if (streamController.signal.aborted) {
+      console.log(`[handleEvent] Stream aborted (graceful shutdown) in chat=${chatId}`);
+      // Finalize the draft with interruption notice
+      await draftStreamer.finalize();
+      return; // Exit cleanly without throwing
+    }
+    // For other errors, re-throw to be handled by the generic error handler
+    throw err;
   }
 
   } finally {
     stopTyping();
+    // Remove this controller from tracking
+    activeStreamControllers.delete(streamController);
   }
 }
