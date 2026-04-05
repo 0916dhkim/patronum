@@ -14,6 +14,7 @@ import type {
   ToolResultBlock,
   TextBlock,
 } from "./types.js";
+import { writeFileSync } from "node:fs";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 8192;
@@ -66,7 +67,7 @@ async function callClaudeForAgent(
 
   // Add thinking if enabled for this agent — but NOT when tool_choice forces a specific tool,
   // as the Anthropic API does not allow thinking + forced tool_choice simultaneously.
-  if (agent.thinking && !toolChoice) {
+  if (agent.thinking && toolChoice?.type !== "tool") {
     body.thinking = { type: "adaptive" };
   }
 
@@ -102,6 +103,125 @@ function extractFinalText(content: ContentBlock[]): string {
     .filter((b): b is { type: "text"; text: string } => b.type === "text")
     .map((b) => b.text);
   return textParts.join("\n").trim();
+}
+
+/**
+ * Redact secrets from a tool result string.
+ * Truncate to a reasonable limit.
+ */
+function sanitizeToolResult(content: string): string {
+  // Redact common secret patterns
+  let sanitized = content
+    // Bearer tokens
+    .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/g, "Bearer [REDACTED]")
+    // API keys (sk-* covers sk-ant-*, sk-prod-*, etc.)
+    .replace(/sk-[A-Za-z0-9\-._~+/]+=*/g, "sk-[REDACTED]")
+    .replace(/(key|token|password|apikey|secret)\s*=\s*[^\s,\]}'"]*/gi, "$1=[REDACTED]");
+
+  // Truncate to 10k chars if needed
+  if (sanitized.length > 10000) {
+    sanitized = sanitized.slice(0, 10000) + "\n[... truncated ...]";
+  }
+
+  return sanitized;
+}
+
+/**
+ * Sanitize an object by redacting values for sensitive keys.
+ */
+function sanitizeObject(obj: Record<string, unknown>): Record<string, unknown> {
+  const sensitiveKeyPattern = /^(password|token|secret|apikey)$/i;
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (sensitiveKeyPattern.test(key)) {
+      result[key] = "[REDACTED]";
+    } else {
+      result[key] = value;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Sanitize a ContentBlock by redacting secrets in tool results and tool_use inputs.
+ */
+function sanitizeContentBlock(block: ContentBlock): ContentBlock {
+  if (block.type === "tool_result") {
+    // If content is a string, sanitize it
+    if (typeof block.content === "string") {
+      return {
+        ...block,
+        content: sanitizeToolResult(block.content),
+      };
+    }
+  } else if (block.type === "tool_use") {
+    // Sanitize tool_use input for sensitive keys
+    return {
+      ...block,
+      input: sanitizeObject(block.input as Record<string, unknown>),
+    };
+  }
+  return block;
+}
+
+/**
+ * Filter out thinking blocks from content and sanitize tool results.
+ */
+function filterAndSanitizeContent(content: ContentBlock[]): ContentBlock[] {
+  return content
+    // Remove thinking and redacted_thinking blocks
+    .filter((b) => b.type !== "thinking" && b.type !== "redacted_thinking")
+    // Sanitize remaining blocks
+    .map(sanitizeContentBlock);
+}
+
+/**
+ * Capture agent messages to a JSON fixture file.
+ * Triggered by env vars: PATRONUM_CAPTURE_AGENT and PATRONUM_CAPTURE_OUTPUT
+ */
+function captureAgentMessages(agentName: string, messages: Message[]): void {
+  const captureAgent = process.env.PATRONUM_CAPTURE_AGENT;
+  const captureOutput = process.env.PATRONUM_CAPTURE_OUTPUT;
+
+  // Warn if only one env var is set
+  if ((captureAgent && !captureOutput) || (!captureAgent && captureOutput)) {
+    console.warn(
+      "[capture] Both PATRONUM_CAPTURE_AGENT and PATRONUM_CAPTURE_OUTPUT must be set to enable capture. Skipping."
+    );
+    return;
+  }
+
+  // Both env vars required
+  if (!captureAgent || !captureOutput) {
+    return;
+  }
+
+  // Only capture if agent name matches
+  if (captureAgent !== agentName) {
+    return;
+  }
+
+  // Clone and filter messages
+  const filtered: Message[] = messages.map((msg) => {
+    if (typeof msg.content === "string") {
+      return msg;
+    }
+    return {
+      ...msg,
+      content: filterAndSanitizeContent(msg.content),
+    };
+  });
+
+  // Write to file
+  try {
+    writeFileSync(captureOutput, JSON.stringify(filtered, null, 2), "utf-8");
+    console.log(`[capture] Wrote ${filtered.length} messages to ${captureOutput}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[capture] Failed to write fixture: ${message}`);
+  }
 }
 
 /**
@@ -192,6 +312,9 @@ export async function runAgentWithThread(
     };
     messages.push(toolResultMessage);
   }
+
+  // Capture messages if env vars are set
+  captureAgentMessages(agent.name, messages);
 
   const finalText = extractFinalText(lastAssistantContent);
   return finalText || "(no response from agent)";
