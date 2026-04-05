@@ -173,10 +173,10 @@ ${test.input.mock_recall}
         subagentSystemPrompt = overrides.subagentContent;
       }
 
-      systemPrompt = [
-        { type: "text", text: CLAUDE_CODE_IDENTITY },
-        { type: "text", text: subagentSystemPrompt },
-      ];
+      systemPrompt = ([
+        { type: "text" as const, text: CLAUDE_CODE_IDENTITY },
+        { type: "text" as const, text: subagentSystemPrompt },
+      ] as Array<{ type: "text"; text: string }>).filter((block) => block.text.trim().length > 0);
     } else {
       // For main agent (Lin), build full system prompt with overrides
       systemPrompt = buildSystemPrompt({
