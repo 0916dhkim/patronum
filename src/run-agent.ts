@@ -47,9 +47,7 @@ async function callClaudeForAgent(
     max_tokens: MAX_TOKENS,
     system: prepareSystemPromptForClaude(systemPrompt),
     tools,
-    messages: prepareMessagesForClaude(messages, {
-      cacheInitialUserMessage: true,
-    }),
+    messages: prepareMessagesForClaude(messages),
   };
 
   // Add tool_choice if specified
