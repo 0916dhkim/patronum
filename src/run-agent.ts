@@ -1,6 +1,6 @@
 import { config } from "./config.js";
 import { getAgentDef, type AgentDef } from "./agents.js";
-import { getToolDefinitions, executeTool } from "./tools/index.js";
+import { getToolDefinitions, executeTool, setCurrentChatId } from "./tools/index.js";
 import {
   logUsage,
   prepareMessagesForClaude,
@@ -105,6 +105,9 @@ export async function runAgentWithThread(
   signal?: AbortSignal
 ): Promise<string> {
   if (signal?.aborted) throw new Error("Task cancelled");
+
+  // Set chat context so tools know which chat this agent belongs to
+  setCurrentChatId(chatId);
 
   // Build system prompt (no thread context — it arrives via tool)
   const systemPrompt = buildAgentSystemPrompt(agent);

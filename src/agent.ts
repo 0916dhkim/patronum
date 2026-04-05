@@ -64,7 +64,7 @@ function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: 
   const skillBodies = buildSkillBodies();
   if (skillBodies) system.push({ type: "text", text: skillBodies });
 
-  // Append any extra context (thread, etc.)
+  // Append any extra context (reserved for future use — currently unused)
   if (options?.extraContext) {
     for (const ctx of options.extraContext) {
       if (ctx) system.push({ type: "text", text: ctx });

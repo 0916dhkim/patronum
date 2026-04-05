@@ -138,6 +138,9 @@ export async function startBot(): Promise<void> {
     const agentTask = taskManager.getTask(taskId);
     if (!agentTask) return;
 
+    // Set chat context for tools running in this agent
+    setCurrentChatId(chatId);
+
     // Fire-and-forget: run the agent in background
     const agentDef = getAgentDef(agentName);
     if (!agentDef) {
@@ -408,12 +411,13 @@ export async function startBot(): Promise<void> {
           const resumeText = `[system] Resumed after restart (${restartState.reason}). Resume context: ${restartState.resumeContext}`;
           const state = getChatState(restartState.chatId);
           // Create a synthetic event to trigger the agent
+          // threadName is empty string because this is not a real agent thread
           const syntheticEvent: ChatEvent = {
             type: "agent_completion",
             taskId: "restart-resume",
             agent: "system",
             result: resumeText,
-            threadName: "restart",
+            threadName: "",
           };
           state.queue.push(syntheticEvent);
           processQueue(restartState.chatId, bot);
@@ -563,7 +567,7 @@ async function handleEvent(
     {
       model: config.claudeModel,
       workspace: config.workspace,
-      extraContext: [],
+      // extraContext is no longer used — thread context arrives via tool, not system prompt
     }
   );
 

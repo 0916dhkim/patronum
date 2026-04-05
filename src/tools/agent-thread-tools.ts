@@ -79,10 +79,11 @@ export const listAgentThreadsTool: ToolHandler = {
       return "No active agent threads.";
     }
 
-    const lines = threads.map(
-      (t) =>
-        `• ${t.name} — ${t.messageCount} messages, last activity ${getRelativeTime(t.lastActivity)}`
-    );
+    const lines = threads.map((t) => {
+      const activityText =
+        t.lastActivity === 0 ? "just created" : getRelativeTime(t.lastActivity);
+      return `• ${t.name} — ${t.messageCount} messages, last activity ${activityText}`;
+    });
 
     return `Active agent threads:\n${lines.join("\n")}`;
   },

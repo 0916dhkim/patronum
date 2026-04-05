@@ -24,7 +24,7 @@ ${sourceDir}/
 │   ├── agent.ts          — Claude API calls, system prompt, tool loop
 │   ├── config.ts         — TOML config loader and validation
 │   ├── session.ts        — SQLite message history (per-chat)
-│   ├── thread.ts         — Shared thread context across agents
+│   ├── agent-thread.ts   — Agent coordination threads (separate DB tables)
 │   ├── compaction.ts     — Token-based context compaction
 │   ├── context.ts        — Loads SOUL.md, AGENTS.md, MEMORY.md into system prompt
 │   ├── templates.ts      — Default templates for workspace files
@@ -33,7 +33,7 @@ ${sourceDir}/
 │   ├── types.ts          — TypeScript types for Claude API
 │   ├── agents.ts         — Agent definitions (lin, alex, iris, quill)
 │   ├── skills.ts         — Skill definitions (auto-discovered from skills/)
-│   ├── run-agent.ts      — Run agent with thread snapshot
+│   ├── run-agent.ts      — Run agent with forced thread context via tool call
 │   ├── task-manager.ts   — Background task tracking
 │   ├── memory/
 │   │   ├── embeddings.ts — Voyage AI embedding client
@@ -42,17 +42,18 @@ ${sourceDir}/
 │   │   ├── tools.ts      — memory_search + memory_write tools
 │   │   └── index.ts      — Memory module exports
 │   └── tools/
-│       ├── index.ts      — Tool registry
-│       ├── exec.ts       — Shell command execution
-│       ├── read.ts       — File reading
-│       ├── write.ts      — File writing
-│       ├── edit.ts       — Find and replace
-│       ├── send-media.ts — Send images/files via Telegram
-│       ├── spawn-agent.ts    — Spawn background agent tasks
-│       ├── cancel-agent.ts   — Cancel running tasks
-│       ├── list-tasks.ts     — List active tasks
-│       ├── self-restart.ts   — Build + restart self
-│       └── chat-context.ts   — Current chat ID tracking
+│       ├── index.ts              — Tool registry
+│       ├── exec.ts               — Shell command execution
+│       ├── read.ts               — File reading
+│       ├── write.ts              — File writing
+│       ├── edit.ts               — Find and replace
+│       ├── send-media.ts         — Send images/files via Telegram
+│       ├── spawn-agent.ts        — Spawn background agent tasks
+│       ├── cancel-agent.ts       — Cancel running tasks
+│       ├── list-tasks.ts         — List active tasks
+│       ├── agent-thread-tools.ts — Read and list agent threads
+│       ├── self-restart.ts       — Build + restart self
+│       └── chat-context.ts       — Current chat ID tracking
 ├── package.json
 └── tsconfig.json
 
@@ -77,7 +78,9 @@ Workspace root: ${config.workspace}
 
 ## Key Architecture
 
-- **One DB** — patronum.db holds messages, archived messages, threads, memory chunks, and vector embeddings
+- **One DB** — patronum.db holds messages, archived messages, agent threads, memory chunks, and vector embeddings
+- **Agent Threads** — separate coordination space for multi-agent loops (agent_threads + agent_thread_messages tables)
+- **Forced Thread Context** — agents' first API call is forced to call read_agent_thread, loading thread context live
 - **Auto-recall** — every user message is embedded and top matches from history are attached to the current turn
 - **Post-turn indexing** — each exchange is embedded and stored for future recall
 - **Compaction** — at 70% context window, older messages are summarized
