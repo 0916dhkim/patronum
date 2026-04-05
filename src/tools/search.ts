@@ -1,4 +1,5 @@
 import type { ToolHandler } from "../types.js";
+import { config } from "../config.js";
 
 const SEARXNG_BASE = "https://searxng.probablydanny.com";
 const TIMEOUT_MS = 10_000;
@@ -55,6 +56,10 @@ export const searchTool: ToolHandler = {
       categories,
       pageno: String(pageno),
     });
+
+    if (config.searxngToken) {
+      params.append("token", config.searxngToken);
+    }
 
     const url = `${SEARXNG_BASE}/search?${params}`;
 

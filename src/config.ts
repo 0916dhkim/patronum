@@ -12,6 +12,7 @@ export interface Config {
   vaultwardenUrl: string;
   vaultwardenEmail: string;
   vaultwardenMasterPassword: string;
+  searxngToken: string;
 }
 
 // Mutable config — populated by initConfig() before use
@@ -25,6 +26,7 @@ export const config: Config = {
   vaultwardenUrl: "",
   vaultwardenEmail: "",
   vaultwardenMasterPassword: "",
+  searxngToken: "",
 };
 
 export async function initConfig(): Promise<void> {
@@ -45,6 +47,11 @@ export async function initConfig(): Promise<void> {
   config.vaultwardenUrl = getOptionalString(vaultwarden, "vaultwarden.url", "url", tomlPath) ?? "";
   config.vaultwardenEmail = getOptionalString(vaultwarden, "vaultwarden.email", "email", tomlPath) ?? "";
   config.vaultwardenMasterPassword = getOptionalString(vaultwarden, "vaultwarden.master_password", "master_password", tomlPath) ?? "";
+
+  const searxng = getOptionalTable(data, "searxng", tomlPath) ?? {};
+  // Allow empty token for searxng — it's optional and Danny can fill it in later
+  const tokenValue = searxng.token;
+  config.searxngToken = typeof tokenValue === "string" ? tokenValue : "";
 }
 
 function findWorkspace(): string {
