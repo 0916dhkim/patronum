@@ -37,15 +37,48 @@ export const runEvalTool: ToolHandler = {
       let stdout = "";
       let stderr = "";
       let timedOut = false;
+      let settled = false;
 
       const child = spawn("node", ["/var/lib/patronum/source/dist/eval.js", ...args], {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      // Set up a timeout
-      const timeoutHandle = setTimeout(() => {
+      // Track all timers so we can clear them on exit
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      let sigkillEscalationHandle: ReturnType<typeof setTimeout> | null = null;
+      let forceResolveHandle: ReturnType<typeof setTimeout> | null = null;
+
+      const clearAllTimers = () => {
+        if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+        if (sigkillEscalationHandle !== null) clearTimeout(sigkillEscalationHandle);
+        if (forceResolveHandle !== null) clearTimeout(forceResolveHandle);
+      };
+
+      const doResolve = (output: string) => {
+        if (settled) return;
+        settled = true;
+        clearAllTimers();
+        resolve(output);
+      };
+
+      // Set up initial timeout (SIGTERM phase)
+      timeoutHandle = setTimeout(() => {
         timedOut = true;
-        child.kill();
+        child.kill("SIGTERM");
+
+        // Start escalation timer: if process doesn't close in 5s, send SIGKILL
+        sigkillEscalationHandle = setTimeout(() => {
+          child.kill("SIGKILL");
+
+          // Start force-resolve timer: if process STILL doesn't close in 5s, force-resolve
+          forceResolveHandle = setTimeout(() => {
+            const parts: string[] = [];
+            if (stdout) parts.push(stdout);
+            if (stderr) parts.push(`[stderr]\n${stderr}`);
+            parts.push("[killed: process could not be terminated (timeout escalation failed)]");
+            doResolve(parts.join("\n") || "(no output)");
+          }, 5000);
+        }, 5000);
       }, TIMEOUT_MS);
 
       child.stdout?.on("data", (data) => {
@@ -57,8 +90,6 @@ export const runEvalTool: ToolHandler = {
       });
 
       child.on("close", (code) => {
-        clearTimeout(timeoutHandle);
-
         const parts: string[] = [];
         if (stdout) parts.push(stdout);
         if (stderr) parts.push(`[stderr]\n${stderr}`);
@@ -68,12 +99,11 @@ export const runEvalTool: ToolHandler = {
           parts.push(`[exit code: ${code}]`);
         }
 
-        resolve(parts.join("\n") || "(no output)");
+        doResolve(parts.join("\n") || "(no output)");
       });
 
       child.on("error", (err) => {
-        clearTimeout(timeoutHandle);
-        resolve(`[spawn error] ${err.message}`);
+        doResolve(`[spawn error] ${err.message}`);
       });
     });
   },
