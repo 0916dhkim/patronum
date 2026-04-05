@@ -8,7 +8,6 @@ import { gradeAssertions, GradeResult } from "./grader.js";
 import { config } from "../config.js";
 import { prepareMessagesForClaude, prepareSystemPromptForClaude, logUsage, getTotalInputTokens } from "../prompt-cache.js";
 import type { Message, ToolUseBlock, ClaudeResponse, ContentBlock } from "../types.js";
-import { stripSection } from "./prompt-override.js";
 import type { PromptOverrides } from "../eval.js";
 
 export interface TestResult {
@@ -180,39 +179,9 @@ ${test.input.mock_recall}
       ];
     } else {
       // For main agent (Lin), build full system prompt with overrides
-      let agentsContent = overrides?.agentsContent;
-
-      // Apply --without-section stripping if specified
-      if (overrides?.withoutSections && overrides.withoutSections.length > 0) {
-        if (!agentsContent) {
-          // Load default AGENTS.md first if not already overridden by --agents-md
-          const { loadContextFile } = await import("../context.js");
-          agentsContent = loadContextFile(config.workspace, "AGENTS.md") || "";
-        }
-
-        // Apply each --without-section sequentially
-        try {
-          for (const section of overrides.withoutSections) {
-            agentsContent = stripSection(agentsContent, section);
-          }
-        } catch (err) {
-          return {
-            name: test.name,
-            status: "ERROR",
-            duration_ms: Date.now() - startTime,
-            toolAssertions: [],
-            gradedAssertions: [],
-            substringAssertions: [],
-            toolCallLog: [],
-            agentResponseText: "(error)",
-            error: err instanceof Error ? err.message : String(err),
-          };
-        }
-      }
-
       systemPrompt = buildSystemPrompt({
         soulContent: overrides?.soulContent,
-        agentsContent,
+        agentsContent: overrides?.agentsContent,
       });
     }
 

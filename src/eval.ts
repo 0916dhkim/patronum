@@ -16,7 +16,6 @@ export interface PromptOverrides {
   soulContent?: string;
   subagentMdPath?: string;
   subagentContent?: string;
-  withoutSections?: string[];
 }
 
 async function printTestResults(
@@ -165,8 +164,7 @@ function isAnyOverrideActive(overrides: PromptOverrides): boolean {
     overrides.soulMdPath ||
     overrides.soulContent ||
     overrides.subagentMdPath ||
-    overrides.subagentContent ||
-    (overrides.withoutSections && overrides.withoutSections.length > 0)
+    overrides.subagentContent
   );
 }
 
@@ -181,18 +179,11 @@ function printOverrideBanner(overrides: PromptOverrides): void {
   if (overrides.subagentMdPath) {
     console.log(`   --subagent-md: ${overrides.subagentMdPath}`);
   }
-  if (overrides.withoutSections && overrides.withoutSections.length > 0) {
-    for (const section of overrides.withoutSections) {
-      console.log(`   --without-section: "${section}"`);
-    }
-  }
   console.log("");
 }
 
 function parsePromptOverrides(args: string[]): PromptOverrides {
-  const overrides: PromptOverrides = {
-    withoutSections: [],
-  };
+  const overrides: PromptOverrides = {};
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--agents-md" && i + 1 < args.length) {
@@ -218,9 +209,6 @@ function parsePromptOverrides(args: string[]): PromptOverrides {
       }
       overrides.subagentMdPath = filePath;
       overrides.subagentContent = readFileSync(filePath, "utf-8");
-      i++;
-    } else if (args[i] === "--without-section" && i + 1 < args.length) {
-      overrides.withoutSections!.push(args[i + 1]);
       i++;
     }
   }
