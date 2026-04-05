@@ -27,6 +27,11 @@ const MAX_TOKENS = 8192;
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
+export type ToolExecutor = (
+  name: string,
+  input: Record<string, unknown>
+) => Promise<{ result: string; isError: boolean }>;
+
 export interface AgentOptions {
   /** Override the model (defaults to config.claudeModel) */
   model?: string;
@@ -34,6 +39,8 @@ export interface AgentOptions {
   workspace?: string;
   /** Additional system context blocks (e.g. thread context) */
   extraContext?: string[];
+  /** Optional custom tool executor (defaults to executeTool) */
+  toolExecutor?: ToolExecutor;
 }
 
 function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
@@ -326,7 +333,8 @@ export async function runAgentStreaming(
           }
 
           console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
-          const { result, isError } = await executeTool(
+          const toolExecutor = options?.toolExecutor ?? executeTool;
+          const { result, isError } = await toolExecutor(
             block.name,
             block.input as Record<string, unknown>
           );
@@ -474,7 +482,8 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
         }
 
         console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
-        const { result, isError } = await executeTool(
+        const toolExecutor = options?.toolExecutor ?? executeTool;
+        const { result, isError } = await toolExecutor(
           block.name,
           block.input as Record<string, unknown>
         );

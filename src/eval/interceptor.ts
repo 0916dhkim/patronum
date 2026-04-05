@@ -1,0 +1,67 @@
+import { ToolExecutor } from "../agent.js";
+
+export interface ToolCallEntry {
+  name: string;
+  input: Record<string, unknown>;
+  timestamp: number;
+  result: string;
+}
+
+export interface Interceptor {
+  executor: ToolExecutor;
+  getLog: () => ToolCallEntry[];
+}
+
+/**
+ * Create an intercepted tool executor for eval runs.
+ * Logs every tool call. Real execution for read and memory_search.
+ * Everything else returns a mock response.
+ */
+export function createInterceptor(
+  realExecutor: (name: string, input: Record<string, unknown>) => Promise<{ result: string; isError: boolean }>
+): Interceptor {
+  const log: ToolCallEntry[] = [];
+
+  const executor: ToolExecutor = async (name: string, input: Record<string, unknown>) => {
+    const timestamp = Date.now();
+
+    // Real execution for safe reads
+    if (name === "read" || name === "memory_search") {
+      try {
+        const { result, isError } = await realExecutor(name, input);
+        log.push({ name, input, timestamp, result });
+        return { result, isError };
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        log.push({ name, input, timestamp, result: `(error: ${errorMsg})` });
+        return { result: `(error: ${errorMsg})`, isError: true };
+      }
+    }
+
+    // Everything else: mock response
+    const mocks: Record<string, string> = {
+      exec: "(eval: command not executed)",
+      write: "(eval: file not written)",
+      edit: "(eval: file not edited)",
+      send_media: "(eval: media not sent)",
+      spawn_agent: "(eval: agent not spawned)",
+      cancel_agent: "(eval: no tasks to cancel)",
+      list_tasks: "(eval: no active tasks)",
+      memory_write: "(eval: memory not written)",
+      self_restart: "(eval: restart not triggered)",
+      search: "(eval: web search not executed)",
+      vaultwarden: "(eval: vault not accessed)",
+      read_agent_thread: "(eval: no thread context)",
+      list_agent_threads: "(eval: no active threads)",
+    };
+
+    const result = mocks[name] || `(eval: ${name} not executed)`;
+    log.push({ name, input, timestamp, result });
+    return { result, isError: false };
+  };
+
+  return {
+    executor,
+    getLog: () => [...log],
+  };
+}
