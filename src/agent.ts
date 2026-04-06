@@ -25,6 +25,7 @@ import type {
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 16000;
+const API_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes hard timeout on API calls
 
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
 export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
@@ -110,27 +111,41 @@ async function callClaude(
     body.thinking = { type: "adaptive" };
   }
 
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.claudeToken}`,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "user-agent": "claude-cli/2.1.85",
-      "x-app": "cli",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  // Compose caller signal with 30-minute timeout
+  const timeoutSignal = AbortSignal.timeout(API_TIMEOUT_MS);
+  const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Claude API error ${response.status}: ${body}`);
+  try {
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.claudeToken}`,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "user-agent": "claude-cli/2.1.85",
+        "x-app": "cli",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: fetchSignal,
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Claude API error ${response.status}: ${body}`);
+    }
+
+    return (await response.json()) as ClaudeResponse;
+  } catch (error) {
+    // Distinguish timeout errors from other failures
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error(
+        `Claude API call timed out after ${API_TIMEOUT_MS / 1000 / 60} minutes — connection stalled`
+      );
+    }
+    throw error;
   }
-
-  return (await response.json()) as ClaudeResponse;
 }
 
 async function callClaudeStreaming(
@@ -155,27 +170,41 @@ async function callClaudeStreaming(
     body.thinking = { type: "adaptive" };
   }
 
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.claudeToken}`,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "user-agent": "claude-cli/2.1.85",
-      "x-app": "cli",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  // Compose caller signal with 30-minute timeout
+  const timeoutSignal = AbortSignal.timeout(API_TIMEOUT_MS);
+  const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Claude API error ${response.status}: ${body}`);
+  try {
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.claudeToken}`,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "user-agent": "claude-cli/2.1.85",
+        "x-app": "cli",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: fetchSignal,
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Claude API error ${response.status}: ${body}`);
+    }
+
+    return response;
+  } catch (error) {
+    // Distinguish timeout errors from other failures
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error(
+        `Claude API call timed out after ${API_TIMEOUT_MS / 1000 / 60} minutes — connection stalled`
+      );
+    }
+    throw error;
   }
-
-  return response;
 }
 
 async function* parseSSEStream(
