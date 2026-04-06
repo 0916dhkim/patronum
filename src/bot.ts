@@ -338,6 +338,13 @@ export async function startBot(): Promise<void> {
 
   // Graceful shutdown — register before launch so it catches signals
   const shutdown = async (signal: string) => {
+    // Hard-kill safety timeout: if graceful shutdown takes > 10 seconds, force exit
+    // Using .unref() so this timeout doesn't keep the event loop alive on its own
+    const hardKillTimeout = setTimeout(() => {
+      console.error("[patronum] Graceful shutdown timeout — forcing exit");
+      process.exit(1);
+    }, 10000).unref();
+
     console.log(`[patronum] Received ${signal}, shutting down...`);
 
     // Set flag to prevent new event processing from starting
@@ -390,7 +397,20 @@ export async function startBot(): Promise<void> {
         console.error("[patronum] Failed to send shutdown notification:", err);
       }
     }
-    bot.stop(signal);
+
+    // Attempt graceful bot stop; wrap in try/catch because bot.stop() throws
+    // "Bot is not running!" if SIGTERM arrives during launch retry loop (before polling starts)
+    try {
+      bot.stop(signal);
+    } catch (err) {
+      console.warn("[patronum] bot.stop() threw (bot may not be running):", err instanceof Error ? err.message : String(err));
+    }
+
+    // Clear the hard-kill timeout — graceful shutdown completed successfully
+    clearTimeout(hardKillTimeout);
+
+    // Force process exit — shutdown is complete, no reason for event loop to continue
+    process.exit(0);
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
