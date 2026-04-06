@@ -17,7 +17,7 @@ import type {
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MAX_TOKENS = 8192;
+const MAX_TOKENS = 16000;
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {

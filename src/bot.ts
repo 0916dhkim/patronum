@@ -351,6 +351,20 @@ export async function startBot(): Promise<void> {
     // Set flag to prevent new event processing from starting
     isShuttingDown = true;
 
+    // Send offline notification immediately, before stream abort and stream wait
+    // This ensures it goes out before the new process can send "Back online"
+    if (config.ownerChatId) {
+      try {
+        await Promise.race([
+          bot.telegram.sendMessage(config.ownerChatId, "🔴 Patronum offline"),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
+        ]);
+        console.log("[patronum] Offline notification sent successfully");
+      } catch (err) {
+        console.error("[patronum] Failed to send shutdown notification:", err);
+      }
+    }
+
     // Abort all active streams with a hard ceiling of 5 seconds
     console.log(`[patronum] Aborting ${activeStreamControllers.size} active stream(s)...`);
     for (const controller of activeStreamControllers) {
@@ -385,18 +399,6 @@ export async function startBot(): Promise<void> {
       console.warn(`[patronum] Timeout waiting for ${activeStreamControllers.size} stream(s) to finalize`);
     } else {
       console.log("[patronum] All streams finalized successfully");
-    }
-
-    // Send offline message BEFORE stopping bot, with 2-second timeout
-    if (config.ownerChatId) {
-      try {
-        await Promise.race([
-          bot.telegram.sendMessage(config.ownerChatId, "🔴 Patronum offline"),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
-        ]);
-      } catch (err) {
-        console.error("[patronum] Failed to send shutdown notification:", err);
-      }
     }
 
     // Attempt graceful bot stop; wrap in try/catch because bot.stop() throws

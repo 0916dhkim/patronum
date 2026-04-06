@@ -24,7 +24,7 @@ import type {
 } from "./types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MAX_TOKENS = 8192;
+const MAX_TOKENS = 16000;
 
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
 export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
