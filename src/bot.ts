@@ -790,8 +790,21 @@ ${recallContent}
       // Extract reply text
       let reply = extractTextFromResponse(newMessages);
 
-      // If reply is empty, look for a tool_result error message and send that instead
-      if (reply.trim() === "") {
+      // Check if the last assistant message in newMessages contributed any text
+      let lastAssistantHasText = false;
+      for (let i = newMessages.length - 1; i >= 0; i--) {
+        const msg = newMessages[i];
+        if (msg.role === "assistant" && Array.isArray(msg.content)) {
+          const hasText = msg.content.some(
+            (b): boolean => b.type === "text" && (b as any).text?.trim()
+          );
+          lastAssistantHasText = hasText;
+          break;
+        }
+      }
+
+      // If the last assistant message has no text, look for a tool_result error message and append it
+      if (!lastAssistantHasText) {
         // Search newMessages for a tool_result user message with is_error: true
         for (const msg of newMessages) {
           if (msg.role === "user" && Array.isArray(msg.content)) {
@@ -802,13 +815,22 @@ ${recallContent}
               ) {
                 const content = (block as any).content;
                 if (typeof content === "string" && content.trim()) {
-                  reply = content;
+                  // Append (don't replace) — preserve any pre-tool preamble text
+                  if (reply && reply.trim()) {
+                    reply = reply + "\n\n" + content;
+                  } else {
+                    reply = content;
+                  }
                   break;
                 } else if (Array.isArray(content)) {
                   // defensive: handle array case too
                   for (const contentBlock of content) {
                     if (contentBlock.type === "text" && contentBlock.text?.trim()) {
-                      reply = contentBlock.text;
+                      if (reply && reply.trim()) {
+                        reply = reply + "\n\n" + contentBlock.text;
+                      } else {
+                        reply = contentBlock.text;
+                      }
                       break;
                     }
                   }
