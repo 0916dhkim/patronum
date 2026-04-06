@@ -567,17 +567,18 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
 }
 
 export function extractTextFromResponse(messages: Message[]): string {
-  // Get the last assistant message and extract text blocks
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
+  // Collect text blocks from all assistant messages in order
+  const allTextParts: string[] = [];
+  for (const msg of messages) {
     if (msg.role === "assistant" && Array.isArray(msg.content)) {
       const textParts = msg.content
         .filter((b): b is { type: "text"; text: string } => b.type === "text")
         .map((b) => b.text);
-      if (textParts.length > 0) {
-        return textParts.join("\n");
-      }
+      allTextParts.push(...textParts);
     }
+  }
+  if (allTextParts.length > 0) {
+    return allTextParts.join("\n");
   }
   return "(no response)";
 }
