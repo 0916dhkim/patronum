@@ -80,6 +80,8 @@ export interface ClaudeUsage {
 export interface ToolHandler {
   definition: ToolDefinition;
   execute: (input: Record<string, unknown>) => Promise<string>;
+  /** If true, executing this tool should terminate the agent loop immediately */
+  terminatesLoop?: boolean;
 }
 
 // --- Claude Streaming SSE Event Types ---

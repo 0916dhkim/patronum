@@ -728,9 +728,9 @@ ${recallContent}
     // Stop the draft streamer before sending the final message
     draftStreamer.stop();
 
-    const { messages: newMessages, inputTokens } = agentResult;
+    const { messages: newMessages, inputTokens, earlyTermination } = agentResult;
 
-    // Save all new messages to session history
+    // Save all new messages to session history (even on early termination)
     // Strip thinking blocks before persistence — they are ephemeral to the current tool loop
     for (const msg of newMessages) {
       const messageToPersist: Message = {
@@ -742,47 +742,52 @@ ${recallContent}
       saveMessage(chatId, messageToPersist);
     }
 
-    // Token-based compaction
-    const model = config.claudeModel;
-    // Strip thinking blocks from newMessages before compaction/archival — same invariant as saveMessage above
-    const newMessagesStripped = newMessages.map((msg) => ({
-      ...msg,
-      content: Array.isArray(msg.content)
-        ? stripThinkingBlocks(msg.content)
-        : msg.content,
-    }));
-    const fullHistory = [...history, ...newMessagesStripped];
-    const { messages: compactedHistory, compacted } = await compactIfNeeded(
-      fullHistory,
-      inputTokens,
-      model
-    );
-    if (compacted) {
-      // Archive the messages that will be replaced (everything not in the compacted set)
-      // The compacted set starts with a summary + ack, so the original messages being
-      // summarized are everything before the kept tail in fullHistory.
-      // Archive the entire pre-compaction history so nothing is lost.
-      archiveMessages(chatId, fullHistory, "70% context window");
-      replaceHistory(chatId, compactedHistory);
-      history.splice(0, history.length, ...compactedHistory);
+    // Token-based compaction (skip on early termination — process is about to die)
+    if (!earlyTermination) {
+      const model = config.claudeModel;
+      // Strip thinking blocks from newMessages before compaction/archival — same invariant as saveMessage above
+      const newMessagesStripped = newMessages.map((msg) => ({
+        ...msg,
+        content: Array.isArray(msg.content)
+          ? stripThinkingBlocks(msg.content)
+          : msg.content,
+      }));
+      const fullHistory = [...history, ...newMessagesStripped];
+      const { messages: compactedHistory, compacted } = await compactIfNeeded(
+        fullHistory,
+        inputTokens,
+        model
+      );
+      if (compacted) {
+        // Archive the messages that will be replaced (everything not in the compacted set)
+        // The compacted set starts with a summary + ack, so the original messages being
+        // summarized are everything before the kept tail in fullHistory.
+        // Archive the entire pre-compaction history so nothing is lost.
+        archiveMessages(chatId, fullHistory, "70% context window");
+        replaceHistory(chatId, compactedHistory);
+        history.splice(0, history.length, ...compactedHistory);
+      }
     }
 
-    // Extract reply text
-    const reply = extractTextFromResponse(newMessages);
+    // Skip sending final message if the loop terminated early (a tool like self_restart requested it)
+    if (!earlyTermination) {
+      // Extract reply text
+      const reply = extractTextFromResponse(newMessages);
 
-    // Post-turn: index this exchange into vector memory
-    if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
-      // Fire-and-forget — don't block the reply
-      const exchangeText = event.type === "user_message" ? event.text : event.caption;
-      indexExchange(chatId, exchangeText, newMessages).catch((err) => {
-        console.error(`[bot] Failed to index exchange:`, err);
-      });
-    }
+      // Post-turn: index this exchange into vector memory
+      if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
+        // Fire-and-forget — don't block the reply
+        const exchangeText = event.type === "user_message" ? event.text : event.caption;
+        indexExchange(chatId, exchangeText, newMessages).catch((err) => {
+          console.error(`[bot] Failed to index exchange:`, err);
+        });
+      }
 
-    // Send to Telegram
-    const chunks = splitMessage(reply);
-    for (const chunk of chunks) {
-      await sendMessageSafe(bot, chatId, chunk);
+      // Send to Telegram
+      const chunks = splitMessage(reply);
+      for (const chunk of chunks) {
+        await sendMessageSafe(bot, chatId, chunk);
+      }
     }
   } catch (err) {
     // Check if this is an abort (graceful shutdown)

@@ -32,7 +32,7 @@ export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official C
 export type ToolExecutor = (
   name: string,
   input: Record<string, unknown>
-) => Promise<{ result: string; isError: boolean }>;
+) => Promise<{ result: string; isError: boolean; terminatesLoop: boolean }>;
 
 export interface AgentOptions {
   /** Override the model (defaults to config.claudeModel) */
@@ -227,6 +227,8 @@ async function* parseSSEStream(
 export interface AgentResult {
   messages: Message[];
   inputTokens: number;
+  /** True if the agent loop terminated early due to a tool requesting termination */
+  earlyTermination: boolean;
 }
 
 export interface StreamingCallbacks {
@@ -251,6 +253,7 @@ export async function runAgentStreaming(
   const newMessages: Message[] = [];
   let lastInputTokens = 0;
   let fullAccumulatedText = "";
+  let earlyTermination = false;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -388,10 +391,16 @@ export async function runAgentStreaming(
 
           console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
           const toolExecutor = options?.toolExecutor ?? executeTool;
-          const { result, isError } = await toolExecutor(
+          const { result, isError, terminatesLoop } = await toolExecutor(
             block.name,
             block.input as Record<string, unknown>
           );
+
+          // Check if any tool requested early termination
+          if (terminatesLoop) {
+            earlyTermination = true;
+          }
+
           return {
             type: "tool_result" as const,
             tool_use_id: block.id,
@@ -411,10 +420,15 @@ export async function runAgentStreaming(
       };
       conversation.push(toolResultMessage);
       newMessages.push(toolResultMessage);
+
+      // If a tool requested early termination, break out of the loop
+      if (earlyTermination) {
+        break;
+      }
     }
   }
 
-  return { messages: newMessages, inputTokens: lastInputTokens };
+  return { messages: newMessages, inputTokens: lastInputTokens, earlyTermination };
 }
 
 /**
@@ -495,6 +509,7 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
   const initialLength = conversation.length;
   const newMessages: Message[] = [];
   let lastInputTokens = 0;
+  let earlyTermination = false;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -537,10 +552,16 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
 
         console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
         const toolExecutor = options?.toolExecutor ?? executeTool;
-        const { result, isError } = await toolExecutor(
+        const { result, isError, terminatesLoop } = await toolExecutor(
           block.name,
           block.input as Record<string, unknown>
         );
+
+        // Check if any tool requested early termination
+        if (terminatesLoop) {
+          earlyTermination = true;
+        }
+
         return {
           type: "tool_result" as const,
           tool_use_id: block.id,
@@ -559,9 +580,13 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
     conversation.push(toolResultMessage);
     newMessages.push(toolResultMessage);
 
+    // If a tool requested early termination, break out of the loop
+    if (earlyTermination) {
+      break;
+    }
   }
 
-  return { messages: newMessages, inputTokens: lastInputTokens };
+  return { messages: newMessages, inputTokens: lastInputTokens, earlyTermination };
 }
 
 export function extractTextFromResponse(messages: Message[]): string {

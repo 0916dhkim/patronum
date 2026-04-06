@@ -78,6 +78,8 @@ export const selfRestartTool: ToolHandler = {
     },
   },
 
+  terminatesLoop: true,
+
   async execute(input: Record<string, unknown>): Promise<string> {
     const reason = (input.reason as string) || "no reason given";
     const resumeContext = (input.resume_context as string) || "";

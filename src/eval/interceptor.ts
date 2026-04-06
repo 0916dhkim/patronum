@@ -27,7 +27,7 @@ export interface InterceptorOptions {
  * dangerous/unsafe ones (self_restart, spawn_agent, memory_write, etc).
  */
 export function createInterceptor(
-  realExecutor: (name: string, input: Record<string, unknown>) => Promise<{ result: string; isError: boolean }>,
+  realExecutor: (name: string, input: Record<string, unknown>) => Promise<{ result: string; isError: boolean; terminatesLoop: boolean }>,
   options?: InterceptorOptions
 ): Interceptor {
   const log: ToolCallEntry[] = [];
@@ -63,13 +63,13 @@ export function createInterceptor(
 
     if (shouldExecuteReally) {
       try {
-        const { result, isError } = await realExecutor(name, input);
+        const { result, isError, terminatesLoop } = await realExecutor(name, input);
         log.push({ name, input, timestamp, result });
-        return { result, isError };
+        return { result, isError, terminatesLoop };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         log.push({ name, input, timestamp, result: `(error: ${errorMsg})` });
-        return { result: `(error: ${errorMsg})`, isError: true };
+        return { result: `(error: ${errorMsg})`, isError: true, terminatesLoop: false };
       }
     }
 
@@ -92,7 +92,7 @@ export function createInterceptor(
 
     const result = mocks[name] || `(eval: ${name} not executed)`;
     log.push({ name, input, timestamp, result });
-    return { result, isError: false };
+    return { result, isError: false, terminatesLoop: false };
   };
 
   return {

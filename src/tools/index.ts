@@ -49,17 +49,17 @@ export function getToolDefinitions(): ToolDefinition[] {
 export async function executeTool(
   name: string,
   input: Record<string, unknown>
-): Promise<{ result: string; isError: boolean }> {
+): Promise<{ result: string; isError: boolean; terminatesLoop: boolean }> {
   const handler = toolMap.get(name);
   if (!handler) {
-    return { result: `Unknown tool: ${name}`, isError: true };
+    return { result: `Unknown tool: ${name}`, isError: true, terminatesLoop: false };
   }
 
   try {
     const result = await handler.execute(input);
-    return { result, isError: false };
+    return { result, isError: false, terminatesLoop: handler.terminatesLoop ?? false };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { result: msg, isError: true };
+    return { result: msg, isError: true, terminatesLoop: false };
   }
 }
