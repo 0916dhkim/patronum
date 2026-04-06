@@ -704,6 +704,13 @@ ${recallContent}
         },
         onToolStart: (toolName: string) => {
           console.log(`[stream] Tool starting: ${toolName}`);
+          // If self_restart is among the tools, finalize the draft cleanly
+          // so accumulated text is sent as a real message before restart
+          if (toolName.includes("self_restart")) {
+            draftStreamer.finalizeClean().catch((err) => {
+              console.warn("[stream] finalizeClean failed:", err);
+            });
+          }
         },
         onToolEnd: (toolName: string) => {
           console.log(`[stream] Tool completed: ${toolName}`);

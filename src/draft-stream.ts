@@ -13,6 +13,7 @@ export class DraftStreamer {
   private lastSendTime: number = 0;
   private flushTimer: NodeJS.Timeout | null = null;
   private failed: boolean = false;
+  private finalized: boolean = false;
 
   private static readonly THROTTLE_MS = 300;
   private static readonly MIN_CHARS_DELTA = 40;
@@ -32,8 +33,11 @@ export class DraftStreamer {
    * Update the pending text. Triggers a flush if:
    * - Enough time has elapsed since last send (THROTTLE_MS), OR
    * - Enough new characters have accumulated (MIN_CHARS_DELTA)
+   * No-op if already finalized.
    */
   update(fullText: string): void {
+    if (this.finalized) return;
+
     this.pendingText = fullText;
 
     // Check if we should flush immediately
@@ -68,12 +72,56 @@ export class DraftStreamer {
   }
 
   /**
+   * Clean finalization: send accumulated text as a real message without interruption suffix.
+   * Sets finalized flag synchronously before async work.
+   * If no accumulated text, does nothing.
+   * No-op if already finalized.
+   */
+  async finalizeClean(): Promise<void> {
+    // Set flag synchronously BEFORE async work to prevent races
+    if (this.finalized) return;
+    this.finalized = true;
+
+    this.stop(); // Clear any pending flush timer
+
+    const accumulatedText = this.pendingText || this.lastSentText;
+
+    // If no text accumulated, nothing to send
+    if (!accumulatedText) return;
+
+    // Try HTML first (like sendMessageSafe pattern)
+    let text = accumulatedText;
+    try {
+      text = markdownToTelegramHtml(accumulatedText);
+      try {
+        await this.bot.telegram.sendMessage(this.chatId, text, { parse_mode: "HTML" });
+        return;
+      } catch {
+        // HTML send failed, retry with plain text
+        await this.bot.telegram.sendMessage(this.chatId, accumulatedText);
+      }
+    } catch (err) {
+      // Markdown conversion failed, try plain text
+      try {
+        await this.bot.telegram.sendMessage(this.chatId, accumulatedText);
+      } catch (e2) {
+        console.warn("[draft] finalizeClean: Failed to send finalization message:", e2);
+      }
+    }
+  }
+
+  /**
    * Finalize the draft as a real message (for graceful shutdown).
    * If there's accumulated text, sends it with an interruption notice.
    * If no text, sends just the interruption notice.
    * Uses the same sendMessageSafe pattern as regular sends: try HTML, fall back to plain text on send failure.
+   * No-op if already finalized.
    */
   async finalize(): Promise<void> {
+    // Set flag synchronously BEFORE async work to prevent races
+    if (this.finalized) return;
+    this.finalized = true;
+
     this.stop(); // Clear any pending flush timer
 
     const accumulatedText = this.pendingText || this.lastSentText;
