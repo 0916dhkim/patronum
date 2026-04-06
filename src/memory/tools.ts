@@ -96,12 +96,6 @@ export const memoryWriteTool: ToolHandler = {
           type: "string",
           description: "The fact to remember — be concise and specific",
         },
-        section: {
-          type: "string",
-          description:
-            "Optional section label for organizing related facts (e.g. 'Preferences', 'Infrastructure'). " +
-            "Used to tag the fact in the vector store.",
-        },
       },
       required: ["fact"],
     },
@@ -109,12 +103,11 @@ export const memoryWriteTool: ToolHandler = {
 
   async execute(input: Record<string, unknown>): Promise<string> {
     const fact = input.fact as string;
-    const section = input.section as string | undefined;
 
     // Index the fact to the vector store
-    await indexCuratedFact(fact, section);
+    await indexCuratedFact(fact);
 
-    return `Indexed fact for semantic search${section ? ` (section: ${section})` : ""}.`;
+    return `Indexed fact for semantic search.`;
   },
 };
 

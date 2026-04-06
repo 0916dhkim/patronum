@@ -64,11 +64,11 @@ export async function indexExchange(
 /**
  * Index a curated memory fact for persistent semantic search.
  */
-export async function indexCuratedFact(fact: string, section?: string): Promise<void> {
+export async function indexCuratedFact(fact: string): Promise<void> {
   try {
     const [embedding] = await embed([fact]);
     storeChunk("system", fact, embedding, { chunkType: "curated" });
-    console.log(`[recall] Indexed curated fact (${fact.length} chars)${section ? ` [${section}]` : ""}`);
+    console.log(`[recall] Indexed curated fact (${fact.length} chars)`);
   } catch (err) {
     console.error("[recall] Failed to index fact:", err);
   }
