@@ -18,7 +18,7 @@ function cloneBlock(block: ContentBlock): ContentBlock {
   return { ...block };
 }
 
-function stripThinkingBlocks(blocks: ContentBlock[]): ContentBlock[] {
+export function stripThinkingBlocks(blocks: ContentBlock[]): ContentBlock[] {
   return blocks.filter((block) => block.type !== "thinking" && block.type !== "redacted_thinking");
 }
 

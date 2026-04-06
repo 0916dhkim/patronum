@@ -12,6 +12,7 @@ import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "
 import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
 import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
+import { stripThinkingBlocks } from "./prompt-cache.js";
 import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
@@ -726,7 +727,7 @@ ${recallContent}
       const messageToPersist: Message = {
         ...msg,
         content: Array.isArray(msg.content)
-          ? msg.content.filter((block) => block.type !== "thinking" && block.type !== "redacted_thinking")
+          ? stripThinkingBlocks(msg.content)
           : msg.content,
       };
       saveMessage(chatId, messageToPersist);
@@ -738,7 +739,7 @@ ${recallContent}
     const newMessagesStripped = newMessages.map((msg) => ({
       ...msg,
       content: Array.isArray(msg.content)
-        ? msg.content.filter((block) => block.type !== "thinking" && block.type !== "redacted_thinking")
+        ? stripThinkingBlocks(msg.content)
         : msg.content,
     }));
     const fullHistory = [...history, ...newMessagesStripped];
