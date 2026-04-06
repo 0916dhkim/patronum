@@ -74,10 +74,14 @@ function startTypingIndicator(bot: Telegraf, chatId: string): () => void {
 // ---------------------------------------------------------------------------
 
 function splitMessage(text: string): string[] {
-  if (text.length <= TELEGRAM_MSG_LIMIT) return [text];
+  // Filter out empty/whitespace-only text — don't return [""] for empty input
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  
+  if (trimmed.length <= TELEGRAM_MSG_LIMIT) return [trimmed];
 
   const chunks: string[] = [];
-  let remaining = text;
+  let remaining = trimmed;
 
   while (remaining.length > 0) {
     if (remaining.length <= TELEGRAM_MSG_LIMIT) {
@@ -784,7 +788,33 @@ ${recallContent}
     // Skip sending final message if the loop terminated early (a tool like self_restart requested it)
     if (!earlyTermination) {
       // Extract reply text
-      const reply = extractTextFromResponse(newMessages);
+      let reply = extractTextFromResponse(newMessages);
+
+      // If reply is empty, look for a tool_result error message and send that instead
+      if (reply.trim() === "") {
+        // Search newMessages for a tool_result user message with isError: true
+        for (const msg of newMessages) {
+          if (msg.role === "user" && Array.isArray(msg.content)) {
+            for (const block of msg.content) {
+              if (
+                block.type === "tool_result" &&
+                (block as any).is_error === true &&
+                Array.isArray((block as any).content)
+              ) {
+                // Extract text from the error content
+                for (const contentBlock of (block as any).content) {
+                  if (contentBlock.type === "text") {
+                    reply = contentBlock.text;
+                    break;
+                  }
+                }
+                if (reply.trim() !== "") break;
+              }
+            }
+            if (reply.trim() !== "") break;
+          }
+        }
+      }
 
       // Post-turn: index this exchange into vector memory
       if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
