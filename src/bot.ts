@@ -37,6 +37,9 @@ const chatStates = new Map<string, ChatState>();
 const activeStreamControllers = new Set<AbortController>();
 let isShuttingDown = false;
 
+// Store restart reason for use in event rendering
+let lastRestartReason: string | null = null;
+
 function getChatState(chatId: string): ChatState {
   let state = chatStates.get(chatId);
   if (!state) {
@@ -432,6 +435,9 @@ export async function startBot(): Promise<void> {
   if (restartState && restartState.chatId) {
     console.log(`[patronum] Resuming after restart: ${restartState.reason}`);
 
+    // Store restart reason for use in event rendering (line ~630)
+    lastRestartReason = restartState.reason;
+
     // Send "back online" notification and clear state (resume succeeded)
     // Give it 3 seconds to settle before injecting resume context
     setTimeout(() => {
@@ -445,15 +451,15 @@ export async function startBot(): Promise<void> {
       // If there's resume context, inject it as a synthetic message to continue work
       if (restartState.resumeContext) {
         setTimeout(() => {
-          const resumeText = `[system] Resumed after restart (${restartState.reason}). Resume context: ${restartState.resumeContext}`;
           const state = getChatState(restartState.chatId);
           // Create a synthetic event to trigger the agent
           // threadName is empty string because this is not a real agent thread
+          // Pass resumeContext directly as result (no wrapper) — framing is applied at rendering time
           const syntheticEvent: ChatEvent = {
             type: "agent_completion",
             taskId: "restart-resume",
             agent: "system",
-            result: resumeText,
+            result: restartState.resumeContext,
             threadName: "",
           };
           state.queue.push(syntheticEvent);
@@ -615,10 +621,18 @@ ${recallContent}
   } else {
     // For agent events, inject a synthetic user message so Lin can respond
     // NOT saved to DB — agent thread is the permanent record
-    const systemText =
-      event.type === "agent_completion"
-        ? `[system] Background task completed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nResult: ${event.result.slice(0, 2000)}`
-        : `[system] Background task failed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nError: ${event.error}`;
+    let systemText: string;
+    
+    if (event.taskId === "restart-resume" && event.type === "agent_completion") {
+      // Special case: restart resume is informational context, not a task completion
+      // Frame it as state description, not action items to execute
+      // Include restart reason in the framing so it's not lost
+      systemText = `[system] You just restarted (reason: ${lastRestartReason || "unknown"}). Here's what you were working on before the restart. Time has passed since the restart — assess whether this context is still relevant before acting on anything.\n\nResume context: ${event.result.slice(0, 2000)}`;
+    } else if (event.type === "agent_completion") {
+      systemText = `[system] Background task completed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nResult: ${event.result.slice(0, 2000)}`;
+    } else {
+      systemText = `[system] Background task failed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nError: ${event.error}`;
+    }
 
     const syntheticMessage: Message = { role: "user", content: systemText };
     history.push(syntheticMessage);

@@ -69,8 +69,9 @@ export const selfRestartTool: ToolHandler = {
         resume_context: {
           type: "string",
           description:
-            "Context for yourself after restart — what you were doing and what to do next. " +
-            "You lose all in-flight state on restart, so put everything you need here.",
+            "State description for yourself after restart — describe what was in progress and why the restart was triggered. " +
+            "This is a state snapshot, not a to-do list. On restart, you'll assess current state before deciding what to do. " +
+            "You lose all in-flight state on restart, so capture key context here.",
         },
       },
       required: ["reason"],
