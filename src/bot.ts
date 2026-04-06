@@ -199,6 +199,18 @@ export async function startBot(): Promise<void> {
 
         console.error(`[spawn] ${agentName} (${taskId}) failed:`, errorMsg);
 
+        // Send fire-and-forget direct notification to originating chat
+        // Truncate error to first line or ~200 chars
+        const errorLines = errorMsg.split("\n");
+        const truncatedError = errorLines[0].length > 200 
+          ? errorLines[0].slice(0, 200) + "..." 
+          : errorLines[0];
+        const notificationMsg = `⚠️ Task ${agentName} (${taskId}) failed: ${truncatedError}`;
+        
+        bot.telegram.sendMessage(chatId, notificationMsg).catch((err) => {
+          console.error(`[spawn] Failed to send failure notification to chat=${chatId}:`, err);
+        });
+
         const state = getChatState(chatId);
         state.queue.push({
           type: "agent_failure",

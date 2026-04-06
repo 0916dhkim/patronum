@@ -94,14 +94,14 @@ export const selfRestartTool: ToolHandler = {
       const taskList = runningTasks
         .map((t) => `  • ${t.taskId} — ${t.agent} (${Math.round((Date.now() - t.startedAt) / 1000)}s)`)
         .join("\n");
-      return `Cannot restart — ${runningTasks.length} task(s) still running:\n${taskList}\n\nCancel them first or wait for them to finish.`;
+      throw new Error(`Cannot restart — ${runningTasks.length} task(s) still running:\n${taskList}\n\nCancel them first or wait for them to finish.`);
     }
 
     const sourceDir = path.join(config.workspace, "source");
     const scriptPath = path.join(sourceDir, "scripts", "restart.sh");
 
     if (!fs.existsSync(scriptPath)) {
-      return `Restart script not found at ${scriptPath}`;
+      throw new Error(`Restart script not found at ${scriptPath}`);
     }
 
     // Spawn detached — script owns its own lifecycle
