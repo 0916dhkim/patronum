@@ -395,6 +395,10 @@ export async function startBot(): Promise<void> {
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
 
+  // Load restart state BEFORE launch retry loop — consume state immediately on startup
+  // before any blocking operations that could outlive the intended lifetime
+  const restartState = loadRestartState();
+
   // Launch with retry — Telegram sometimes holds polling sessions for 30-60s
   let launchAttempts = 0;
   const maxAttempts = 5;
@@ -430,8 +434,7 @@ export async function startBot(): Promise<void> {
 
   console.log("[patronum] Bot started (async multi-agent mode)");
 
-  // Check for restart resume state and send notifications BEFORE launch blocking
-  const restartState = loadRestartState();
+  // Check for restart resume state and send notifications using pre-loaded state
   if (restartState && restartState.chatId) {
     console.log(`[patronum] Resuming after restart: ${restartState.reason}`);
 
