@@ -792,26 +792,31 @@ ${recallContent}
 
       // If reply is empty, look for a tool_result error message and send that instead
       if (reply.trim() === "") {
-        // Search newMessages for a tool_result user message with isError: true
+        // Search newMessages for a tool_result user message with is_error: true
         for (const msg of newMessages) {
           if (msg.role === "user" && Array.isArray(msg.content)) {
             for (const block of msg.content) {
               if (
                 block.type === "tool_result" &&
-                (block as any).is_error === true &&
-                Array.isArray((block as any).content)
+                (block as any).is_error === true
               ) {
-                // Extract text from the error content
-                for (const contentBlock of (block as any).content) {
-                  if (contentBlock.type === "text") {
-                    reply = contentBlock.text;
-                    break;
+                const content = (block as any).content;
+                if (typeof content === "string" && content.trim()) {
+                  reply = content;
+                  break;
+                } else if (Array.isArray(content)) {
+                  // defensive: handle array case too
+                  for (const contentBlock of content) {
+                    if (contentBlock.type === "text" && contentBlock.text?.trim()) {
+                      reply = contentBlock.text;
+                      break;
+                    }
                   }
                 }
-                if (reply.trim() !== "") break;
+                if (reply.trim()) break;
               }
             }
-            if (reply.trim() !== "") break;
+            if (reply.trim()) break;
           }
         }
       }
