@@ -62,13 +62,13 @@ export async function indexExchange(
 }
 
 /**
- * Index a curated memory fact (from MEMORY.md edits).
+ * Index a curated memory fact for persistent semantic search.
  */
-export async function indexFact(chatId: string, fact: string): Promise<void> {
+export async function indexCuratedFact(fact: string, section?: string): Promise<void> {
   try {
     const [embedding] = await embed([fact]);
-    storeChunk(chatId, fact, embedding, { chunkType: "curated" });
-    console.log(`[recall] Indexed curated fact (${fact.length} chars)`);
+    storeChunk("system", fact, embedding, { chunkType: "curated" });
+    console.log(`[recall] Indexed curated fact (${fact.length} chars)${section ? ` [${section}]` : ""}`);
   } catch (err) {
     console.error("[recall] Failed to index fact:", err);
   }

@@ -426,10 +426,33 @@ export async function startBot(): Promise<void> {
 
   while (launchAttempts < maxAttempts) {
     try {
+      // Wrap launch in a promise that resolves from the onLaunch callback
+      // The callback fires after getMe() succeeds but before polling starts — that's when we know we're connected
       await new Promise<void>((resolve, reject) => {
-        bot.launch({ allowedUpdates: ["message"] })
-          .then(() => resolve())
-          .catch(reject);
+        let launched = false;
+
+        // Start launch with the onLaunch callback
+        const launchPromise = bot.launch(
+          { allowedUpdates: ["message"] },
+          () => {
+            // onLaunch fires after getMe() succeeds but before polling starts
+            launched = true;
+            resolve();
+          }
+        );
+
+        // Attach a separate catch to the launch promise for fatal polling errors
+        // If polling crashes after onLaunch, we need to know about it
+        launchPromise.catch((err) => {
+          if (launched) {
+            // Polling crash after successful getMe is unrecoverable
+            console.error("[patronum] Fatal polling error after successful launch:", err);
+            process.exit(1);
+          } else {
+            // Pre-launch failure — let the retry loop handle it
+            reject(err);
+          }
+        });
       });
       break; // Success
     } catch (err) {
@@ -464,6 +487,8 @@ export async function startBot(): Promise<void> {
     // Send "back online" notification and clear state (resume succeeded)
     // Give it 3 seconds to settle before injecting resume context
     setTimeout(() => {
+      if (isShuttingDown) return;
+
       bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").then(() => {
         clearRestartState();
       }).catch((err) => {
@@ -492,6 +517,8 @@ export async function startBot(): Promise<void> {
     }, 3000); // 3s delay to let polling connection establish
   } else if (config.ownerChatId) {
     setTimeout(() => {
+      if (isShuttingDown) return;
+
       bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online").catch((err) => {
         console.error("[patronum] Failed to send startup notification:", err);
       });

@@ -1,16 +1,13 @@
 /**
  * Memory tools exposed to the agent:
  * - memory_search: explicit semantic search with optional filters
- * - memory_write: append/edit curated facts in MEMORY.md
+ * - memory_write: index curated facts to the vector store
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import { embedQuery } from "./embeddings.js";
 import { searchChunks, getChunkCount, getChunkById } from "./store.js";
-import { indexFact } from "./recall.js";
+import { indexCuratedFact } from "./recall.js";
 import { getAdjacentMessages } from "../session.js";
-import { config } from "../config.js";
 import type { ToolHandler } from "../types.js";
 
 export const memorySearchTool: ToolHandler = {
@@ -90,9 +87,8 @@ export const memoryWriteTool: ToolHandler = {
   definition: {
     name: "memory_write",
     description:
-      "Write a curated fact to MEMORY.md. Use this to save important information, " +
-      "preferences, decisions, or lessons learned that should persist across sessions. " +
-      "The fact is also indexed for semantic search.",
+      "Index a curated fact for semantic search. Use this to save important information, " +
+      "preferences, decisions, or lessons learned that should persist across sessions.",
     input_schema: {
       type: "object",
       properties: {
@@ -103,8 +99,8 @@ export const memoryWriteTool: ToolHandler = {
         section: {
           type: "string",
           description:
-            "Optional section header to place the fact under (e.g. 'Preferences', 'Infrastructure'). " +
-            "If the section exists, the fact is appended to it. Otherwise appended at the end.",
+            "Optional section label for organizing related facts (e.g. 'Preferences', 'Infrastructure'). " +
+            "Used to tag the fact in the vector store.",
         },
       },
       required: ["fact"],
@@ -115,46 +111,10 @@ export const memoryWriteTool: ToolHandler = {
     const fact = input.fact as string;
     const section = input.section as string | undefined;
 
-    const memoryPath = path.join(config.workspace, "MEMORY.md");
+    // Index the fact to the vector store
+    await indexCuratedFact(fact, section);
 
-    // Read existing content or start fresh
-    let content: string;
-    try {
-      content = fs.readFileSync(memoryPath, "utf-8");
-    } catch {
-      content = "# MEMORY.md\n\nCurated facts and persistent context.\n";
-    }
-
-    if (section) {
-      // Try to find the section and append under it
-      const sectionHeader = `## ${section}`;
-      const idx = content.indexOf(sectionHeader);
-
-      if (idx !== -1) {
-        // Find the end of this section (next ## or end of file)
-        const afterHeader = idx + sectionHeader.length;
-        const nextSection = content.indexOf("\n## ", afterHeader);
-        const insertAt = nextSection !== -1 ? nextSection : content.length;
-
-        content =
-          content.slice(0, insertAt).trimEnd() +
-          `\n- ${fact}\n` +
-          content.slice(insertAt);
-      } else {
-        // Create the section at the end
-        content = content.trimEnd() + `\n\n## ${section}\n- ${fact}\n`;
-      }
-    } else {
-      // Append at the end
-      content = content.trimEnd() + `\n- ${fact}\n`;
-    }
-
-    fs.writeFileSync(memoryPath, content, "utf-8");
-
-    // Also index the fact for vector search
-    await indexFact("system", fact);
-
-    return `Saved to MEMORY.md${section ? ` (section: ${section})` : ""} and indexed for search.`;
+    return `Indexed fact for semantic search${section ? ` (section: ${section})` : ""}.`;
   },
 };
 

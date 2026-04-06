@@ -26,7 +26,7 @@ ${sourceDir}/
 │   ├── session.ts        — SQLite message history (per-chat)
 │   ├── agent-thread.ts   — Agent coordination threads (separate DB tables)
 │   ├── compaction.ts     — Token-based context compaction
-│   ├── context.ts        — Loads SOUL.md, AGENTS.md, MEMORY.md into system prompt
+│   ├── context.ts        — Loads SOUL.md, AGENTS.md into system prompt
 │   ├── templates.ts      — Default templates for workspace files
 │   ├── project-context.ts — This file (project self-knowledge)
 │   ├── format.ts         — Markdown → Telegram HTML conversion
@@ -64,7 +64,6 @@ Workspace root: ${config.workspace}
 │   └── <name>/SUBAGENT.md
 ├── SOUL.md         — Your personality (user-editable)
 ├── AGENTS.md       — Your rules and preferences (user-editable)
-├── MEMORY.md       — Curated persistent facts (you can edit this)
 ├── patronum.db     — SQLite database (messages, memory, threads)
 └── skills/         — Skill definitions (SKILL.md with frontmatter, auto-discovered)
 

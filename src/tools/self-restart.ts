@@ -85,9 +85,9 @@ export const selfRestartTool: ToolHandler = {
     const { getCurrentChatId } = await import("./chat-context.js");
     const chatId = getCurrentChatId() || config.ownerChatId || "";
 
-    // Refuse to restart if there are running tasks — they'd be silently killed
+    // Refuse to restart if there are running tasks in any chat — a restart kills the whole process
     const { taskManager } = await import("../task-manager.js");
-    const runningTasks = taskManager.listRunning(chatId);
+    const runningTasks = taskManager.getAllRunning();
     if (runningTasks.length > 0) {
       const taskList = runningTasks
         .map((t) => `  • ${t.taskId} — ${t.agent} (${Math.round((Date.now() - t.startedAt) / 1000)}s)`)

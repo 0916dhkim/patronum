@@ -63,8 +63,6 @@ export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text";
   if (soul) system.push({ type: "text", text: soul });
   const agents = options?.agentsContent ?? loadContextFile(workspace, "AGENTS.md");
   if (agents) system.push({ type: "text", text: agents });
-  const memory = loadContextFile(workspace, "MEMORY.md");
-  if (memory) system.push({ type: "text", text: `[MEMORY.md — curated persistent facts]\n\n${memory}` });
 
   // Always inject project self-knowledge
   system.push({ type: "text", text: getProjectContext() });

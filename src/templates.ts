@@ -24,7 +24,7 @@ export const DEFAULT_AGENTS = `\
 - cancel_agent: cancel a background subagent task
 - list_tasks: inspect active and recent background subagent tasks
 - memory_search: search past conversations and curated facts
-- memory_write: save important facts to MEMORY.md
+- memory_write: index important facts for semantic search
 - self_restart: rebuild and restart after code changes
 
 ## Rules
