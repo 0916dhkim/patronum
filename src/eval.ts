@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import Database from "better-sqlite3";
 import { initConfig, config } from "./config.js";
 import { initMemoryStore, initEmbeddings } from "./memory/index.js";
 import { loadAllTests, loadTest, filterByTags, type EvalTest } from "./eval/loader.js";
@@ -157,6 +159,76 @@ async function printComparison(): Promise<number> {
   return 0;
 }
 
+async function dumpFixture(chatId: string, startId: number, endId: number, outputPath?: string): Promise<number> {
+  try {
+    // Determine output path
+    const finalOutputPath = outputPath || path.join(config.workspace, "tests", "fixtures", `${chatId}-${startId}-${endId}.json`);
+    const outputDir = path.dirname(finalOutputPath);
+
+    // Create output directory if needed
+    mkdirSync(outputDir, { recursive: true });
+
+    // Open database
+    const dbPath = path.join(config.workspace, "patronum.db");
+    if (!existsSync(dbPath)) {
+      console.error(`❌ Database not found: ${dbPath}`);
+      return 1;
+    }
+
+    const db = new Database(dbPath, { readonly: true });
+
+    try {
+      // Query messages
+      const stmt = db.prepare(
+        "SELECT role, content_json FROM messages WHERE chat_id = ? AND id BETWEEN ? AND ? ORDER BY id ASC"
+      );
+      const rows = stmt.all(chatId as string, startId, endId) as Array<{ role: string; content_json: string }>;
+
+      if (rows.length === 0) {
+        console.log(`⚠️  No messages found for chat_id=${chatId}, id between ${startId} and ${endId}`);
+      }
+
+      // Map to fixture format
+      const fixture = rows.map((row) => {
+        let content: string | Record<string, unknown>[] | Record<string, unknown>;
+        try {
+          content = JSON.parse(row.content_json);
+        } catch {
+          // If not valid JSON, treat as string
+          content = row.content_json;
+        }
+
+        return {
+          role: row.role,
+          content: content,
+        };
+      });
+
+      // Write to file
+      writeFileSync(finalOutputPath, JSON.stringify(fixture, null, 2), "utf-8");
+
+      // Report results
+      console.log(`✅ Dumped ${fixture.length} message(s) to: ${finalOutputPath}`);
+      if (fixture.length > 0) {
+        console.log("");
+        console.log("First entry:");
+        console.log(JSON.stringify(fixture[0], null, 2).split("\n").slice(0, 5).join("\n"));
+        console.log("");
+        console.log("Last entry:");
+        console.log(JSON.stringify(fixture[fixture.length - 1], null, 2).split("\n").slice(0, 5).join("\n"));
+      }
+
+      return 0;
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`❌ Error dumping fixture: ${msg}`);
+    return 1;
+  }
+}
+
 function isAnyOverrideActive(overrides: PromptOverrides): boolean {
   return !!(
     overrides.agentsMdPath ||
@@ -220,14 +292,36 @@ async function main(): Promise<number> {
   try {
     await initConfig();
 
-    // Initialize memory store for real memory_search execution
+    // Initialize memory store for real memory_search execution (not needed for dump-fixture)
+    const args = process.argv.slice(2);
+    const command = args[0] || "run";
+
+    // Handle dump-fixture without initializing memory store
+    if (command === "dump-fixture") {
+      if (args.length < 4) {
+        console.error("❌ dump-fixture requires arguments: <chat_id> <start_id> <end_id> [output_path]");
+        console.error("Usage: eval.js dump-fixture <chat_id> <start_id> <end_id> [output_path]");
+        return 1;
+      }
+
+      const chatId = args[1];
+      const startId = parseInt(args[2], 10);
+      const endId = parseInt(args[3], 10);
+      const outputPath = args[4];
+
+      if (isNaN(startId) || isNaN(endId)) {
+        console.error("❌ start_id and end_id must be valid numbers");
+        return 1;
+      }
+
+      return await dumpFixture(chatId, startId, endId, outputPath);
+    }
+
+    // Initialize memory store for other commands
     if (config.voyageApiKey) {
       await initEmbeddings(config.voyageApiKey);
     }
     await initMemoryStore();
-
-    const args = process.argv.slice(2);
-    const command = args[0] || "run";
 
     if (command === "run") {
       // Parse remaining arguments: [test-name] [--tag tag1 [--tag tag2 ...]] [--agents-md ...] etc
@@ -261,7 +355,7 @@ async function main(): Promise<number> {
       return await printComparison();
     } else {
       console.error(`Unknown command: ${command}`);
-      console.error("Usage: eval.js [run [test-name] | run --tag <tag> | compare]");
+      console.error("Usage: eval.js [run [test-name] | run --tag <tag> | compare | dump-fixture <chat_id> <start_id> <end_id> [output_path]]");
       return 1;
     }
   } catch (err) {
