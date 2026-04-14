@@ -33,8 +33,7 @@ This repo is a TypeScript Telegram-based Claude agent harness. Preserve the curr
 
 ## Memory
 - Auto-recall context is injected as transient message pairs (user + assistant ack) before the current user message — not saved to DB and not in the system prompt.
-- `MEMORY.md` is for curated durable facts, not temporary notes.
-- Avoid writing noisy or ephemeral data into memory.
+- Avoid indexing noisy or ephemeral data into memory.
 
 ## Subagents
 - Subagents are workspace-defined only via `agents/<name>/SUBAGENT.md`.

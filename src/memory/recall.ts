@@ -62,19 +62,6 @@ export async function indexExchange(
 }
 
 /**
- * Index a curated memory fact for persistent semantic search.
- */
-export async function indexCuratedFact(fact: string): Promise<void> {
-  try {
-    const [embedding] = await embed([fact]);
-    storeChunk("system", fact, embedding, { chunkType: "curated" });
-    console.log(`[recall] Indexed curated fact (${fact.length} chars)`);
-  } catch (err) {
-    console.error("[recall] Failed to index fact:", err);
-  }
-}
-
-/**
  * Format a user+assistant exchange into a compact chunk for embedding.
  */
 function formatExchange(userText: string, assistantMessages: Message[]): string {

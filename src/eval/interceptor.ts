@@ -24,7 +24,7 @@ export interface InterceptorOptions {
  * Everything else returns a mock response.
  * 
  * Subagent mode: Logs every tool call. Real execution for most tools EXCEPT
- * dangerous/unsafe ones (self_restart, spawn_agent, memory_write, etc).
+ * dangerous/unsafe ones (self_restart, spawn_agent, cancel_agent, vaultwarden, etc).
  */
 export function createInterceptor(
   realExecutor: (name: string, input: Record<string, unknown>) => Promise<{ result: string; isError: boolean; terminatesLoop: boolean }>,
@@ -41,7 +41,6 @@ export function createInterceptor(
       "self_restart",
       "spawn_agent",
       "cancel_agent",
-      "memory_write",
       "vaultwarden",
       "send_media",
       "list_tasks",
@@ -82,7 +81,6 @@ export function createInterceptor(
       spawn_agent: "(eval: agent not spawned)",
       cancel_agent: "(eval: no tasks to cancel)",
       list_tasks: "(eval: no active tasks)",
-      memory_write: "(eval: memory not written)",
       self_restart: "(eval: restart not triggered)",
       search: "(eval: web search not executed)",
       vaultwarden: "(eval: vault not accessed)",

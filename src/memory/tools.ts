@@ -1,12 +1,11 @@
 /**
  * Memory tools exposed to the agent:
- * - memory_search: explicit semantic search with optional filters
- * - memory_write: index curated facts to the vector store
+ * - memory_search: explicit semantic search
+ * - memory_fetch_context: fetch context around a memory chunk
  */
 
 import { embedQuery } from "./embeddings.js";
 import { searchChunks, getChunkCount, getChunkById } from "./store.js";
-import { indexCuratedFact } from "./recall.js";
 import { getAdjacentMessages } from "../session.js";
 import type { ToolHandler } from "../types.js";
 
@@ -14,7 +13,7 @@ export const memorySearchTool: ToolHandler = {
   definition: {
     name: "memory_search",
     description:
-      "Search your memory for relevant past conversations and curated facts. " +
+      "Search your memory for relevant past conversations. " +
       "Use this to recall things discussed previously, look up decisions, or find context. " +
       "Supports optional time filtering and chat scoping.",
     input_schema: {
@@ -40,11 +39,6 @@ export const memorySearchTool: ToolHandler = {
           type: "string",
           description: "Optional: only return results before this date (YYYY-MM-DD)",
         },
-        type: {
-          type: "string",
-          enum: ["conversation", "curated", "all"],
-          description: "Filter by chunk type (default: all)",
-        },
       },
       required: ["query"],
     },
@@ -56,13 +50,11 @@ export const memorySearchTool: ToolHandler = {
     const chatId = input.chat_id as string | undefined;
     const afterDate = input.after_date as string | undefined;
     const beforeDate = input.before_date as string | undefined;
-    const chunkType = input.type === "all" ? undefined : (input.type as string | undefined);
 
     const queryVec = await embedQuery(query);
     const results = searchChunks(queryVec, {
       topK,
       chatId,
-      chunkType,
       afterDate,
       beforeDate,
     });
@@ -80,34 +72,6 @@ export const memorySearchTool: ToolHandler = {
       .join("\n\n---\n\n");
 
     return `Found ${results.length} relevant memories:\n\n${formatted}`;
-  },
-};
-
-export const memoryWriteTool: ToolHandler = {
-  definition: {
-    name: "memory_write",
-    description:
-      "Index a curated fact for semantic search. Use this to save important information, " +
-      "preferences, decisions, or lessons learned that should persist across sessions.",
-    input_schema: {
-      type: "object",
-      properties: {
-        fact: {
-          type: "string",
-          description: "The fact to remember — be concise and specific",
-        },
-      },
-      required: ["fact"],
-    },
-  },
-
-  async execute(input: Record<string, unknown>): Promise<string> {
-    const fact = input.fact as string;
-
-    // Index the fact to the vector store
-    await indexCuratedFact(fact);
-
-    return `Indexed fact for semantic search.`;
   },
 };
 

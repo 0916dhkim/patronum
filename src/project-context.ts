@@ -39,7 +39,7 @@ ${sourceDir}/
 │   │   ├── embeddings.ts — Voyage AI embedding client
 │   │   ├── store.ts      — sqlite-vec vector storage + search
 │   │   ├── recall.ts     — Auto-recall orchestration
-│   │   ├── tools.ts      — memory_search + memory_write tools
+│   │   ├── tools.ts      — memory_search + memory_fetch_context tools
 │   │   └── index.ts      — Memory module exports
 │   └── tools/
 │       ├── index.ts              — Tool registry

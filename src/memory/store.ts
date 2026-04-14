@@ -102,7 +102,6 @@ export function searchChunks(
   options?: {
     topK?: number;
     chatId?: string;
-    chunkType?: string;
     afterDate?: string;
     beforeDate?: string;
   }
@@ -111,7 +110,7 @@ export function searchChunks(
 
   // sqlite-vec KNN query
   // We search more than needed if we're filtering, then apply filters
-  const searchLimit = options?.chatId || options?.chunkType || options?.afterDate || options?.beforeDate
+  const searchLimit = options?.chatId || options?.afterDate || options?.beforeDate
     ? topK * 4  // over-fetch when filtering
     : topK;
 
@@ -153,7 +152,6 @@ export function searchChunks(
 
     // Apply optional filters
     if (options?.chatId && chunk.chat_id !== options.chatId) continue;
-    if (options?.chunkType && chunk.chunk_type !== options.chunkType) continue;
     if (options?.afterDate && chunk.created_at < options.afterDate) continue;
     if (options?.beforeDate && chunk.created_at > options.beforeDate) continue;
 

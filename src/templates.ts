@@ -23,8 +23,7 @@ export const DEFAULT_AGENTS = `\
 - spawn_agent: run a configured workspace subagent in the background
 - cancel_agent: cancel a background subagent task
 - list_tasks: inspect active and recent background subagent tasks
-- memory_search: search past conversations and curated facts
-- memory_write: index important facts for semantic search
+- memory_search: search past conversations
 - self_restart: rebuild and restart after code changes
 
 ## Rules
