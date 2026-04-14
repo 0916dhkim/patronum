@@ -13,6 +13,50 @@ let db: Database.Database;
 // voyage-3-large produces 1024-dimensional embeddings
 const EMBEDDING_DIM = 1024;
 
+/**
+ * Migration: Remove curated memory tier.
+ * - Deletes all 'curated' rows from memory_chunks and their embeddings
+ * - Drops idx_memory_chunks_type index if it exists
+ * - Drops chunk_type column if it exists
+ * Idempotent — safe to run on DBs without the column.
+ */
+function migrateCuratedMemory(): void {
+  try {
+    // Check if chunk_type column exists
+    const tableInfo = db
+      .prepare(`PRAGMA table_info(memory_chunks)`)
+      .all() as Array<{ name: string }>;
+    
+    const hasChunkTypeColumn = tableInfo.some((col) => col.name === "chunk_type");
+    
+    if (!hasChunkTypeColumn) {
+      // Already migrated or fresh database
+      return;
+    }
+
+    // Delete curated rows and their embeddings
+    const curatedRows = db
+      .prepare(`SELECT id FROM memory_chunks WHERE chunk_type = 'curated'`)
+      .all() as Array<{ id: number }>;
+
+    for (const row of curatedRows) {
+      db.prepare(`DELETE FROM memory_vec WHERE chunk_id = ?`).run(row.id);
+      db.prepare(`DELETE FROM memory_chunks WHERE id = ?`).run(row.id);
+    }
+
+    // Drop the index if it exists
+    db.exec(`DROP INDEX IF EXISTS idx_memory_chunks_type`);
+
+    // Drop the column
+    db.exec(`ALTER TABLE memory_chunks DROP COLUMN chunk_type`);
+
+    console.log(`[memory] Migration: removed ${curatedRows.length} curated rows and chunk_type column`);
+  } catch (err) {
+    console.error("[memory] Migration failed:", err);
+    // Non-fatal — don't break initialization
+  }
+}
+
 export function initMemoryStore(): void {
   const dbPath = path.join(config.workspace, "patronum.db");
   db = new Database(dbPath);
@@ -28,8 +72,7 @@ export function initMemoryStore(): void {
       chat_id TEXT NOT NULL,
       chunk_text TEXT NOT NULL,
       turn_number INTEGER,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      chunk_type TEXT NOT NULL DEFAULT 'conversation'
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
@@ -37,9 +80,9 @@ export function initMemoryStore(): void {
     CREATE INDEX IF NOT EXISTS idx_memory_chunks_chat ON memory_chunks(chat_id)
   `);
 
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_memory_chunks_type ON memory_chunks(chunk_type)
-  `);
+  // Migration: Remove curated memory tier
+  // Delete curated rows and drop chunk_type column if it exists
+  migrateCuratedMemory();
 
   // Create the virtual vector table for embeddings
   // sqlite-vec uses vec0 virtual table type
@@ -60,18 +103,16 @@ export function storeChunk(
   embedding: number[],
   options?: {
     turnNumber?: number;
-    chunkType?: string;
   }
 ): number {
   const turnNumber = options?.turnNumber ?? null;
-  const chunkType = options?.chunkType ?? "conversation";
 
   const result = db
     .prepare(
-      `INSERT INTO memory_chunks (chat_id, chunk_text, turn_number, chunk_type)
-       VALUES (?, ?, ?, ?)`
+      `INSERT INTO memory_chunks (chat_id, chunk_text, turn_number)
+       VALUES (?, ?, ?)`
     )
-    .run(chatId, chunkText, turnNumber, chunkType);
+    .run(chatId, chunkText, turnNumber);
 
   const chunkId = result.lastInsertRowid; // BigInt from better-sqlite3
 
@@ -88,7 +129,6 @@ export interface MemorySearchResult {
   chunkId: number;
   chatId: string;
   chunkText: string;
-  chunkType: string;
   createdAt: string;
   distance: number;
 }
@@ -137,14 +177,13 @@ export function searchChunks(
 
     const chunk = db
       .prepare(
-        `SELECT id, chat_id, chunk_text, chunk_type, created_at
+        `SELECT id, chat_id, chunk_text, created_at
          FROM memory_chunks WHERE id = ?`
       )
       .get(vec.chunk_id) as {
         id: number;
         chat_id: string;
         chunk_text: string;
-        chunk_type: string;
         created_at: string;
       } | undefined;
 
@@ -159,7 +198,6 @@ export function searchChunks(
       chunkId: chunk.id,
       chatId: chunk.chat_id,
       chunkText: chunk.chunk_text,
-      chunkType: chunk.chunk_type,
       createdAt: chunk.created_at,
       distance: vec.distance,
     });

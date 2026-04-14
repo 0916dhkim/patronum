@@ -51,7 +51,6 @@ export async function indexExchange(
     const [embedding] = await embed([chunkText]);
     storeChunk(chatId, chunkText, embedding, {
       turnNumber,
-      chunkType: "conversation",
     });
 
     console.log(`[recall] Indexed exchange (${chunkText.length} chars) for chat=${chatId}`);

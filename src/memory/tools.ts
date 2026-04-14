@@ -67,7 +67,7 @@ export const memorySearchTool: ToolHandler = {
     const formatted = results
       .map(
         (r, i) =>
-          `[${i + 1}] (${r.chunkType} | ${r.createdAt} | dist: ${r.distance.toFixed(3)})\n${r.chunkText}`
+          `[${i + 1}] (${r.createdAt} | dist: ${r.distance.toFixed(3)})\n${r.chunkText}`
       )
       .join("\n\n---\n\n");
 
