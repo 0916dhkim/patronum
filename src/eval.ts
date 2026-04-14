@@ -178,11 +178,28 @@ async function dumpFixture(chatId: string, startId: number, endId: number, outpu
     const db = new Database(dbPath, { readonly: true });
 
     try {
-      // Query messages
+      // Query messages — check active table first, fall back to archived
       const stmt = db.prepare(
         "SELECT role, content_json FROM messages WHERE chat_id = ? AND id BETWEEN ? AND ? ORDER BY id ASC"
       );
-      const rows = stmt.all(chatId as string, startId, endId) as Array<{ role: string; content_json: string }>;
+      let rows = stmt.all(chatId as string, startId, endId) as Array<{ role: string; content_json: string }>;
+
+      if (rows.length === 0) {
+        try {
+          const archivedStmt = db.prepare(
+            "SELECT role, content_json FROM archived_messages WHERE chat_id = ? AND id BETWEEN ? AND ? ORDER BY id ASC"
+          );
+          rows = archivedStmt.all(chatId as string, startId, endId) as Array<{ role: string; content_json: string }>;
+          if (rows.length > 0) {
+            console.log(`ℹ️  Messages found in archived_messages table.`);
+          }
+        } catch (err: unknown) {
+          // If archived_messages doesn't exist, fall through to "no messages found"
+          if (!(err instanceof Error && err.message.includes("no such table"))) {
+            throw err;
+          }
+        }
+      }
 
       if (rows.length === 0) {
         console.log(`⚠️  No messages found for chat_id=${chatId}, id between ${startId} and ${endId}`);
