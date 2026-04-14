@@ -52,8 +52,6 @@ export interface AgentOptions {
   agentsContent?: string;
   /** Enable adaptive thinking mode */
   thinking?: boolean;
-  /** Thinking effort level: "low" | "medium" | "high" (only used when thinking is true) */
-  thinkingEffort?: "low" | "medium" | "high";
 }
 
 export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
@@ -111,9 +109,6 @@ async function callClaude(
 
   if (options?.thinking) {
     body.thinking = { type: "adaptive" };
-    if (options?.thinkingEffort) {
-      body.effort = options.thinkingEffort;
-    }
   }
 
   // Compose caller signal with 30-minute timeout
@@ -173,9 +168,6 @@ async function callClaudeStreaming(
 
   if (options?.thinking) {
     body.thinking = { type: "adaptive" };
-    if (options?.thinkingEffort) {
-      body.effort = options.thinkingEffort;
-    }
   }
 
   // Compose caller signal with 30-minute timeout
