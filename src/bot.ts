@@ -736,6 +736,7 @@ ${recallContent}
         model: config.claudeModel,
         workspace: config.workspace,
         thinking: true,
+        thinkingEffort: "medium",
         // extraContext is no longer used — thread context arrives via tool, not system prompt
       },
       streamController.signal

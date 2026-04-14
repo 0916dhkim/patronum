@@ -9,6 +9,7 @@ export interface AgentDef {
   description: string; // from SUBAGENT.md frontmatter — used for routing
   systemPrompt: string; // body of SUBAGENT.md (below frontmatter)
   thinking?: boolean; // enable adaptive thinking for this agent
+  thinkingEffort?: "low" | "medium" | "high"; // effort level when thinking is enabled
 }
 
 interface SubagentFrontmatter {
@@ -87,6 +88,12 @@ function loadAgentFiles(): ParsedSubagent[] {
     // Parse thinking flag (frontmatter values are strings, treat "true" as truthy)
     const thinking = frontmatter.thinking === "true";
 
+    // Parse optional thinking effort level
+    const effortRaw = frontmatter.effort;
+    const thinkingEffort = (effortRaw === "low" || effortRaw === "medium" || effortRaw === "high")
+      ? effortRaw as "low" | "medium" | "high"
+      : undefined;
+
     parsed.push({
       sourcePath: subagentPath,
       definition: {
@@ -96,6 +103,7 @@ function loadAgentFiles(): ParsedSubagent[] {
         description,
         systemPrompt: body,
         thinking: thinking || undefined,
+        thinkingEffort,
       },
     });
   }

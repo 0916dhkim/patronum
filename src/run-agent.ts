@@ -80,6 +80,9 @@ async function callClaudeForAgent(
   // as the Anthropic API does not allow thinking + forced tool_choice simultaneously.
   if (agent.thinking && toolChoice?.type !== "tool") {
     body.thinking = { type: "adaptive" };
+    if (agent.thinkingEffort) {
+      body.effort = agent.thinkingEffort;
+    }
   }
 
   const response = await fetch(API_URL, {
