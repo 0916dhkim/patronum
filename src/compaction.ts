@@ -39,8 +39,8 @@ const contextWindowCache = new Map<string, number>();
 
 // Fallback context windows for common models
 const FALLBACK_CONTEXT_WINDOWS: Record<string, number> = {
-  "claude-sonnet-4-6": 200_000,
-  "claude-opus-4-6": 200_000,
+  "claude-sonnet-4-6": 1_000_000,
+  "claude-opus-4-6": 1_000_000,
   "claude-haiku-4-5-20251001": 200_000,
   "claude-sonnet-4-20250514": 200_000,
 };
@@ -66,11 +66,12 @@ export async function getContextWindow(model: string): Promise<number> {
     });
 
     if (response.ok) {
-      const data = (await response.json()) as { context_window?: number };
-      if (data.context_window) {
-        contextWindowCache.set(model, data.context_window);
-        console.log(`[compaction] Cached context window for ${model}: ${data.context_window}`);
-        return data.context_window;
+      const data = (await response.json()) as { context_window?: number; max_input_tokens?: number };
+      const contextWindow = data.context_window ?? data.max_input_tokens;
+      if (contextWindow) {
+        contextWindowCache.set(model, contextWindow);
+        console.log(`[compaction] Cached context window for ${model}: ${contextWindow}`);
+        return contextWindow;
       }
     } else {
       console.warn(`[compaction] Models API returned ${response.status} for ${model}, using fallback`);
