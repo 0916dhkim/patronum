@@ -962,9 +962,9 @@ ${recallContent}
           }
         }
         
-        // Silently discard the partial draft — no message sent
-        // The new response starting immediately is signal enough
-        draftStreamer.stop();
+        // Send the partial draft text without any suffix
+        // finalizeClean() sends accumulated partial text as-is with no interruption notice
+        await draftStreamer.finalizeClean();
       }
       
       return; // Exit cleanly without throwing
