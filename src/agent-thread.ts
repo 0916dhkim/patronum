@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import crypto from "node:crypto";
 import { config } from "./config.js";
+import type { Message } from "./types.js";
 
 let db: Database.Database;
 
@@ -38,6 +39,21 @@ export function initAgentThread(): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_agent_thread_messages
       ON agent_thread_messages(thread_id, timestamp)
+  `);
+
+  // Table for subagent internal messages (the full message loop)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subagent_internal_messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL,
+      agent_name TEXT NOT NULL,
+      internal_messages_json TEXT NOT NULL,
+      FOREIGN KEY (thread_id) REFERENCES agent_threads(id)
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_subagent_internal_messages_lookup
+      ON subagent_internal_messages(thread_id)
   `);
 }
 
@@ -174,4 +190,61 @@ export function closeThread(chatId: string, name: string): boolean {
     .run(Date.now(), chatId, name);
 
   return result.changes > 0;
+}
+
+/**
+ * Persist the full sanitized message array from a subagent run to the database.
+ * This is called at the end of runAgentWithThread, whether the run succeeds or fails.
+ * The messages array contains the complete internal loop: user prompts, assistant responses,
+ * tool calls, and tool results.
+ */
+export function persistSubagentMessages(
+  threadId: string,
+  agentName: string,
+  messages: Message[]
+): void {
+  try {
+    const id = crypto.randomUUID();
+    const internalMessagesJson = JSON.stringify(messages);
+
+    db.prepare(
+      `INSERT INTO subagent_internal_messages
+       (id, thread_id, agent_name, internal_messages_json)
+       VALUES (?, ?, ?, ?)`
+    ).run(id, threadId, agentName, internalMessagesJson);
+  } catch (err) {
+    // Log warning but don't crash — persistence is best-effort
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[persist] Failed to write subagent messages for thread ${threadId}: ${message}`);
+  }
+}
+
+/**
+ * Load subagent internal messages for a given thread, optionally filtered by agent name.
+ * Returns an array of { agentName, messages } objects.
+ */
+export function loadSubagentMessages(
+  threadId: string,
+  agentNameFilter?: string
+): Array<{ agentName: string; messages: Message[] }> {
+  const query = agentNameFilter
+    ? `SELECT agent_name, internal_messages_json
+       FROM subagent_internal_messages
+       WHERE thread_id = ? AND agent_name = ?
+       ORDER BY rowid ASC`
+    : `SELECT agent_name, internal_messages_json
+       FROM subagent_internal_messages
+       WHERE thread_id = ?
+       ORDER BY rowid ASC`;
+
+  const rows = (
+    agentNameFilter
+      ? db.prepare(query).all(threadId, agentNameFilter)
+      : db.prepare(query).all(threadId)
+  ) as Array<{ agent_name: string; internal_messages_json: string }>;
+
+  return rows.map((row) => ({
+    agentName: row.agent_name,
+    messages: JSON.parse(row.internal_messages_json) as Message[],
+  }));
 }

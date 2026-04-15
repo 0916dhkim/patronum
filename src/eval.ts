@@ -10,6 +10,8 @@ import { loadAllTests, loadTest, filterByTags, type EvalTest } from "./eval/load
 import { runAllTests, runTest } from "./eval/runner.js";
 import { saveResults, loadRecentResults } from "./eval/results.js";
 import { compareRuns } from "./eval/compare.js";
+import { loadSubagentMessages, findThread } from "./agent-thread.js";
+import type { Message } from "./types.js";
 
 export interface PromptOverrides {
   agentsMdPath?: string;
@@ -157,6 +159,74 @@ async function printComparison(): Promise<number> {
   console.log("");
 
   return 0;
+}
+
+async function dumpSubagentFixture(
+  chatId: string,
+  threadName: string,
+  agentName?: string,
+  outputPath?: string
+): Promise<number> {
+  try {
+    // Look up thread ID by chat ID and name
+    const thread = findThread(chatId, threadName);
+    if (!thread) {
+      console.error(`❌ Thread not found: chat_id=${chatId}, name=${threadName}`);
+      return 1;
+    }
+
+    // Load subagent messages, optionally filtered by agent name
+    const runs = loadSubagentMessages(thread.id, agentName);
+
+    if (runs.length === 0) {
+      console.log(`⚠️  No subagent runs found for thread ${threadName}${agentName ? ` (agent: ${agentName})` : ""}`);
+      return 1;
+    }
+
+    // If multiple runs and no agent filter, ask user to pick or combine them
+    if (runs.length > 1 && !agentName) {
+      console.log(`Found ${runs.length} runs for thread ${threadName}:`);
+      runs.forEach((run, i) => {
+        console.log(`  [${i}] ${run.agentName}`);
+      });
+      console.log("");
+      console.log("Tip: Specify --agent <name> to filter by agent, or use index [0], [1], etc. for now.");
+      console.log("For now, dumping all runs combined...");
+      console.log("");
+    }
+
+    // Flatten all runs into a single fixture
+    const allMessages: Message[] = runs.flatMap((run) => run.messages);
+
+    // Determine output path
+    const finalOutputPath =
+      outputPath || path.join(config.workspace, "tests", "fixtures", `${threadName}-subagent.json`);
+    const outputDir = path.dirname(finalOutputPath);
+
+    mkdirSync(outputDir, { recursive: true });
+
+    // Write to file
+    writeFileSync(finalOutputPath, JSON.stringify(allMessages, null, 2), "utf-8");
+
+    // Report results
+    console.log(
+      `✅ Dumped ${allMessages.length} message(s) from ${runs.length} run(s) to: ${finalOutputPath}`
+    );
+    if (allMessages.length > 0) {
+      console.log("");
+      console.log("First entry:");
+      console.log(JSON.stringify(allMessages[0], null, 2).split("\n").slice(0, 5).join("\n"));
+      console.log("");
+      console.log("Last entry:");
+      console.log(JSON.stringify(allMessages[allMessages.length - 1], null, 2).split("\n").slice(0, 5).join("\n"));
+    }
+
+    return 0;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`❌ Error dumping subagent fixture: ${msg}`);
+    return 1;
+  }
 }
 
 async function dumpFixture(chatId: string, startId: number, endId: number, outputPath?: string): Promise<number> {
@@ -340,6 +410,31 @@ async function main(): Promise<number> {
     }
     await initMemoryStore();
 
+    if (command === "dump-subagent-fixture") {
+      if (args.length < 3) {
+        console.error("❌ dump-subagent-fixture requires arguments: <chat_id> <thread_name> [--agent <agent_name>] [output_path]");
+        console.error("Usage: eval.js dump-subagent-fixture <chat_id> <thread_name> [--agent <agent_name>] [output_path]");
+        return 1;
+      }
+
+      const chatId = args[1];
+      const threadName = args[2];
+      let agentName: string | undefined;
+      let outputPath: string | undefined;
+
+      // Parse optional --agent flag and output path
+      for (let i = 3; i < args.length; i++) {
+        if (args[i] === "--agent" && i + 1 < args.length) {
+          agentName = args[i + 1];
+          i++;
+        } else if (!args[i].startsWith("--")) {
+          outputPath = args[i];
+        }
+      }
+
+      return await dumpSubagentFixture(chatId, threadName, agentName, outputPath);
+    }
+
     if (command === "run") {
       // Parse remaining arguments: [test-name] [--tag tag1 [--tag tag2 ...]] [--agents-md ...] etc
       const testName = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
@@ -372,7 +467,11 @@ async function main(): Promise<number> {
       return await printComparison();
     } else {
       console.error(`Unknown command: ${command}`);
-      console.error("Usage: eval.js [run [test-name] | run --tag <tag> | compare | dump-fixture <chat_id> <start_id> <end_id> [output_path]]");
+      console.error("Usage:");
+      console.error("  eval.js run [test-name] [--tag <tag>] [--agents-md <path>] ...");
+      console.error("  eval.js compare");
+      console.error("  eval.js dump-fixture <chat_id> <start_id> <end_id> [output_path]");
+      console.error("  eval.js dump-subagent-fixture <chat_id> <thread_name> [--agent <agent_name>] [output_path]");
       return 1;
     }
   } catch (err) {

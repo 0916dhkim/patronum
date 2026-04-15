@@ -6,6 +6,7 @@ import {
   prepareMessagesForClaude,
   prepareSystemPromptForClaude,
 } from "./prompt-cache.js";
+import { persistSubagentMessages } from "./agent-thread.js";
 import type {
   Message,
   ClaudeResponse,
@@ -14,7 +15,7 @@ import type {
   ToolResultBlock,
   TextBlock,
 } from "./types.js";
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 32000;
@@ -192,76 +193,6 @@ function filterAndSanitizeContent(content: ContentBlock[]): ContentBlock[] {
 }
 
 /**
- * Capture agent messages to a JSON fixture file.
- *
- * Triggered by sentinel file: `/var/lib/patronum/.capture.json`
- * If the file exists and is valid JSON with `{ agent: string, output: string }`, capture is enabled.
- * If the file doesn't exist, capture is off (zero impact).
- * If the file exists but is malformed, a warning is logged and capture is skipped.
- *
- * Format of `.capture.json`:
- * ```json
- * {
- *   "agent": "alex",
- *   "output": "/var/lib/patronum/tests/fixtures/alex-overspec-plan.json"
- * }
- * ```
- */
-function captureAgentMessages(agentName: string, messages: Message[]): void {
-  const captureFilePath = "/var/lib/patronum/.capture.json";
-
-  // If the sentinel file doesn't exist, capture is off
-  if (!existsSync(captureFilePath)) {
-    return;
-  }
-
-  // Try to read and parse the sentinel file
-  let captureConfig: { agent?: unknown; output?: unknown };
-  try {
-    const fileContent = readFileSync(captureFilePath, "utf-8");
-    captureConfig = JSON.parse(fileContent);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[capture] Failed to read or parse ${captureFilePath}: ${message}`);
-    return;
-  }
-
-  // Validate the config shape
-  const { agent: captureAgent, output: captureOutput } = captureConfig;
-  if (typeof captureAgent !== "string" || typeof captureOutput !== "string") {
-    console.warn(
-      `[capture] Invalid ${captureFilePath}: must contain { agent: string, output: string }. Skipping.`
-    );
-    return;
-  }
-
-  // Only capture if agent name matches
-  if (captureAgent !== agentName) {
-    return;
-  }
-
-  // Clone and filter messages
-  const filtered: Message[] = messages.map((msg) => {
-    if (typeof msg.content === "string") {
-      return msg;
-    }
-    return {
-      ...msg,
-      content: filterAndSanitizeContent(msg.content),
-    };
-  });
-
-  // Write to file
-  try {
-    writeFileSync(captureOutput, JSON.stringify(filtered, null, 2), "utf-8");
-    console.log(`[capture] Wrote ${filtered.length} messages to ${captureOutput}`);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[capture] Failed to write fixture: ${message}`);
-  }
-}
-
-/**
  * Run a specialist agent with a named thread context.
  * The agent's first API call is forced to call read_agent_thread,
  * which loads the thread live from the DB.
@@ -287,71 +218,83 @@ export async function runAgentWithThread(
   let lastAssistantContent: ContentBlock[] = [];
   let isFirstCall = true;
 
-  while (true) {
-    if (signal?.aborted) throw new Error("Task cancelled");
+  try {
+    while (true) {
+      if (signal?.aborted) throw new Error("Task cancelled");
 
-    // Force read_agent_thread on the first call
-    const toolChoice = isFirstCall
-      ? ({ type: "tool", name: "read_agent_thread" } as const)
-      : undefined;
+      // Force read_agent_thread on the first call
+      const toolChoice = isFirstCall
+        ? ({ type: "tool", name: "read_agent_thread" } as const)
+        : undefined;
 
-    const response = await callClaudeForAgent(agent, messages, systemPrompt, signal, toolChoice);
-    logUsage(`agent:${agent.name}`, response.usage);
-    isFirstCall = false;
+      const response = await callClaudeForAgent(agent, messages, systemPrompt, signal, toolChoice);
+      logUsage(`agent:${agent.name}`, response.usage);
+      isFirstCall = false;
 
-    const assistantMessage: Message = {
-      role: "assistant",
-      content: response.content,
-    };
-    messages.push(assistantMessage);
-    lastAssistantContent = response.content;
+      const assistantMessage: Message = {
+        role: "assistant",
+        content: response.content,
+      };
+      messages.push(assistantMessage);
+      lastAssistantContent = response.content;
 
-    if (response.stop_reason !== "tool_use") {
-      break;
-    }
+      if (response.stop_reason !== "tool_use") {
+        break;
+      }
 
-    if (signal?.aborted) throw new Error("Task cancelled");
+      if (signal?.aborted) throw new Error("Task cancelled");
 
-    const toolUseBlocks = response.content.filter(
-      (b): b is ToolUseBlock => b.type === "tool_use"
-    );
+      const toolUseBlocks = response.content.filter(
+        (b): b is ToolUseBlock => b.type === "tool_use"
+      );
 
-    const toolResults: ToolResultBlock[] = await Promise.all(
-      toolUseBlocks.map(async (block) => {
-        if (signal?.aborted) {
+      const toolResults: ToolResultBlock[] = await Promise.all(
+        toolUseBlocks.map(async (block) => {
+          if (signal?.aborted) {
+            return {
+              type: "tool_result" as const,
+              tool_use_id: block.id,
+              content: "Task cancelled",
+              is_error: true,
+            };
+          }
+
+          console.log(`[agent:${agent.name}:tool] ${block.name}(${JSON.stringify(block.input)})`);
+          const { result, isError } = await executeTool(
+            block.name,
+            block.input as Record<string, unknown>
+          );
           return {
             type: "tool_result" as const,
             tool_use_id: block.id,
-            content: "Task cancelled",
-            is_error: true,
+            content: result.slice(0, 50_000),
+            is_error: isError,
           };
-        }
+        })
+      );
 
-        console.log(`[agent:${agent.name}:tool] ${block.name}(${JSON.stringify(block.input)})`);
-        const { result, isError } = await executeTool(
-          block.name,
-          block.input as Record<string, unknown>
-        );
-        return {
-          type: "tool_result" as const,
-          tool_use_id: block.id,
-          content: result.slice(0, 50_000),
-          is_error: isError,
-        };
-      })
-    );
+      if (signal?.aborted) throw new Error("Task cancelled");
 
-    if (signal?.aborted) throw new Error("Task cancelled");
+      const toolResultMessage: Message = {
+        role: "user",
+        content: toolResults,
+      };
+      messages.push(toolResultMessage);
+    }
+  } finally {
+    // Sanitize and persist the internal message array, regardless of success or failure
+    const sanitizedMessages = messages.map((msg) => {
+      if (typeof msg.content === "string") {
+        return msg;
+      }
+      return {
+        ...msg,
+        content: filterAndSanitizeContent(msg.content),
+      };
+    });
 
-    const toolResultMessage: Message = {
-      role: "user",
-      content: toolResults,
-    };
-    messages.push(toolResultMessage);
+    persistSubagentMessages(threadId, agent.name, sanitizedMessages);
   }
-
-  // Capture messages if .capture.json sentinel file is present
-  captureAgentMessages(agent.name, messages);
 
   const finalText = extractFinalText(lastAssistantContent);
   return finalText || "(no response from agent)";
