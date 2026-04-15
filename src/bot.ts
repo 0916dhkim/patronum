@@ -962,8 +962,9 @@ ${recallContent}
           }
         }
         
-        // Finalize the draft with interrupt message
-        await draftStreamer.finalize("interrupted");
+        // Silently discard the partial draft — no message sent
+        // The new response starting immediately is signal enough
+        draftStreamer.stop();
       }
       
       return; // Exit cleanly without throwing
