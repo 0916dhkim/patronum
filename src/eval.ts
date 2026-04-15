@@ -10,7 +10,6 @@ import { loadAllTests, loadTest, filterByTags, type EvalTest } from "./eval/load
 import { runAllTests, runTest } from "./eval/runner.js";
 import { saveResults, loadRecentResults } from "./eval/results.js";
 import { compareRuns } from "./eval/compare.js";
-import { loadSubagentMessages, findThreadAnyStatus } from "./agent-thread.js";
 import type { Message } from "./types.js";
 
 export interface PromptOverrides {
