@@ -58,7 +58,7 @@ function getChatState(chatId: string): ChatState {
 // Typing keepalive
 // ---------------------------------------------------------------------------
 
-const TYPING_INTERVAL_MS = 4000; // Telegram typing indicator lasts ~5s, refresh every 4s
+const TYPING_INTERVAL_MS = 3000; // Telegram typing indicator lasts ~5s, refresh every 3s to absorb network latency
 
 function startTypingIndicator(bot: Telegraf, chatId: string): () => void {
   // Fire immediately
