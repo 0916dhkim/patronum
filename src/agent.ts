@@ -277,6 +277,17 @@ export interface StreamingCallbacks {
   onToolEnd?: (toolName: string) => void;
 }
 
+// Custom error class to preserve partial messages on abort
+class TaskCancelledError extends Error {
+  constructor(
+    message: string,
+    public partialMessages: Message[] = []
+  ) {
+    super(message);
+    this.name = "TaskCancelledError";
+  }
+}
+
 export async function runAgentStreaming(
   messages: Message[],
   callbacks: StreamingCallbacks,
@@ -294,174 +305,184 @@ export async function runAgentStreaming(
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    if (signal?.aborted) throw new Error("Task cancelled");
+    try {
+      if (signal?.aborted) throw new TaskCancelledError("Task cancelled", newMessages);
 
-    const response = await callClaudeStreaming(conversation, options, signal, initialLength);
+      const response = await callClaudeStreaming(conversation, options, signal, initialLength);
 
-    // Track accumulated content blocks in original order
-    const contentBlocks: ContentBlock[] = [];
-    const toolUseBlocks: ToolUseBlock[] = []; // also tracked separately for tool execution
-    let stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" = "end_turn";
-    let currentBlockType: "text" | "tool_use" | "thinking" | "redacted_thinking" | null = null;
-    let currentTextBlockText = "";
-    let currentToolUseId = "";
-    let currentToolUseName = "";
-    let currentToolUseInput = "";
-    let currentThinkingText = "";
-    let currentThinkingSignature = "";
-    let currentRedactedThinkingData = "";
+      // Track accumulated content blocks in original order
+      const contentBlocks: ContentBlock[] = [];
+      const toolUseBlocks: ToolUseBlock[] = []; // also tracked separately for tool execution
+      let stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" = "end_turn";
+      let currentBlockType: "text" | "tool_use" | "thinking" | "redacted_thinking" | null = null;
+      let currentTextBlockText = "";
+      let currentToolUseId = "";
+      let currentToolUseName = "";
+      let currentToolUseInput = "";
+      let currentThinkingText = "";
+      let currentThinkingSignature = "";
+      let currentRedactedThinkingData = "";
 
-    // Parse the SSE stream
-    for await (const event of parseSSEStream(response, signal)) {
-      if (event.type === "message_start") {
-        lastInputTokens = getTotalInputTokens(event.message.usage) || lastInputTokens;
-        logUsage("lin", event.message.usage);
-      } else if (event.type === "content_block_start") {
-        if (event.content_block.type === "text") {
-          currentBlockType = "text";
-          currentTextBlockText = "";
-        } else if (event.content_block.type === "tool_use") {
-          currentBlockType = "tool_use";
-          currentToolUseId = event.content_block.id;
-          currentToolUseName = event.content_block.name;
-          currentToolUseInput = ""; // May remain empty if tool has no params — handled at block_stop
-        } else if (event.content_block.type === "thinking") {
-          currentBlockType = "thinking";
-          currentThinkingText = "";
-          currentThinkingSignature = "";
-        } else if (event.content_block.type === "redacted_thinking") {
-          currentBlockType = "redacted_thinking";
-          currentRedactedThinkingData = event.content_block.data;
-        }
-      } else if (event.type === "content_block_delta") {
-        if (event.delta.type === "text_delta") {
-          const delta = event.delta.text;
-          currentTextBlockText += delta;
-          fullAccumulatedText += delta;
-          callbacks.onTextDelta(delta, fullAccumulatedText);
-        } else if (event.delta.type === "input_json_delta") {
-          currentToolUseInput += event.delta.partial_json;
-        } else if (event.delta.type === "thinking_delta") {
-          currentThinkingText += event.delta.thinking;
-        } else if (event.delta.type === "signature_delta") {
-          currentThinkingSignature += event.delta.signature;
-        } else if (event.delta.type === "redacted_thinking") {
-          currentRedactedThinkingData += event.delta.data;
-        }
-      } else if (event.type === "content_block_stop") {
-        // Finalize the content block based on tracked type
-        if (currentBlockType === "text") {
-          const block: TextBlock = { type: "text", text: currentTextBlockText };
-          contentBlocks.push(block);
-          currentTextBlockText = "";
-        } else if (currentBlockType === "tool_use") {
-          try {
-            // If no input_json_delta events were received (tool with no params),
-            // default to empty object to avoid JSON.parse("") throwing
-            const input = JSON.parse(currentToolUseInput || "{}") as Record<string, unknown>;
-            const block: ToolUseBlock = {
-              type: "tool_use",
-              id: currentToolUseId,
-              name: currentToolUseName,
-              input,
+      // Parse the SSE stream
+      for await (const event of parseSSEStream(response, signal)) {
+        if (event.type === "message_start") {
+          lastInputTokens = getTotalInputTokens(event.message.usage) || lastInputTokens;
+          logUsage("lin", event.message.usage);
+        } else if (event.type === "content_block_start") {
+          if (event.content_block.type === "text") {
+            currentBlockType = "text";
+            currentTextBlockText = "";
+          } else if (event.content_block.type === "tool_use") {
+            currentBlockType = "tool_use";
+            currentToolUseId = event.content_block.id;
+            currentToolUseName = event.content_block.name;
+            currentToolUseInput = ""; // May remain empty if tool has no params — handled at block_stop
+          } else if (event.content_block.type === "thinking") {
+            currentBlockType = "thinking";
+            currentThinkingText = "";
+            currentThinkingSignature = "";
+          } else if (event.content_block.type === "redacted_thinking") {
+            currentBlockType = "redacted_thinking";
+            currentRedactedThinkingData = event.content_block.data;
+          }
+        } else if (event.type === "content_block_delta") {
+          if (event.delta.type === "text_delta") {
+            const delta = event.delta.text;
+            currentTextBlockText += delta;
+            fullAccumulatedText += delta;
+            callbacks.onTextDelta(delta, fullAccumulatedText);
+          } else if (event.delta.type === "input_json_delta") {
+            currentToolUseInput += event.delta.partial_json;
+          } else if (event.delta.type === "thinking_delta") {
+            currentThinkingText += event.delta.thinking;
+          } else if (event.delta.type === "signature_delta") {
+            currentThinkingSignature += event.delta.signature;
+          } else if (event.delta.type === "redacted_thinking") {
+            currentRedactedThinkingData += event.delta.data;
+          }
+        } else if (event.type === "content_block_stop") {
+          // Finalize the content block based on tracked type
+          if (currentBlockType === "text") {
+            const block: TextBlock = { type: "text", text: currentTextBlockText };
+            contentBlocks.push(block);
+            currentTextBlockText = "";
+          } else if (currentBlockType === "tool_use") {
+            try {
+              // If no input_json_delta events were received (tool with no params),
+              // default to empty object to avoid JSON.parse("") throwing
+              const input = JSON.parse(currentToolUseInput || "{}") as Record<string, unknown>;
+              const block: ToolUseBlock = {
+                type: "tool_use",
+                id: currentToolUseId,
+                name: currentToolUseName,
+                input,
+              };
+              contentBlocks.push(block);
+              toolUseBlocks.push(block);
+            } catch (e) {
+              console.warn(`[stream] Failed to parse tool input for ${currentToolUseId}:`, e);
+            }
+            currentToolUseId = "";
+            currentToolUseName = "";
+            currentToolUseInput = "";
+          } else if (currentBlockType === "thinking") {
+            const block: ThinkingBlock = {
+              type: "thinking",
+              thinking: currentThinkingText,
+              signature: currentThinkingSignature,
             };
             contentBlocks.push(block);
-            toolUseBlocks.push(block);
-          } catch (e) {
-            console.warn(`[stream] Failed to parse tool input for ${currentToolUseId}:`, e);
+            currentThinkingText = "";
+            currentThinkingSignature = "";
+          } else if (currentBlockType === "redacted_thinking") {
+            const block: RedactedThinkingBlock = {
+              type: "redacted_thinking",
+              data: currentRedactedThinkingData,
+            };
+            contentBlocks.push(block);
+            currentRedactedThinkingData = "";
           }
-          currentToolUseId = "";
-          currentToolUseName = "";
-          currentToolUseInput = "";
-        } else if (currentBlockType === "thinking") {
-          const block: ThinkingBlock = {
-            type: "thinking",
-            thinking: currentThinkingText,
-            signature: currentThinkingSignature,
-          };
-          contentBlocks.push(block);
-          currentThinkingText = "";
-          currentThinkingSignature = "";
-        } else if (currentBlockType === "redacted_thinking") {
-          const block: RedactedThinkingBlock = {
-            type: "redacted_thinking",
-            data: currentRedactedThinkingData,
-          };
-          contentBlocks.push(block);
-          currentRedactedThinkingData = "";
+          currentBlockType = null;
+        } else if (event.type === "message_delta") {
+          stopReason = event.delta.stop_reason;
         }
-        currentBlockType = null;
-      } else if (event.type === "message_delta") {
-        stopReason = event.delta.stop_reason;
       }
-    }
 
-    // Build the assistant message preserving original block order
-    const content: ContentBlock[] = contentBlocks;
-    const assistantMessage: Message = {
-      role: "assistant",
-      content,
-    };
-    conversation.push(assistantMessage);
-    newMessages.push(assistantMessage);
+      // Build the assistant message preserving original block order
+      const content: ContentBlock[] = contentBlocks;
+      const assistantMessage: Message = {
+        role: "assistant",
+        content,
+      };
+      conversation.push(assistantMessage);
+      newMessages.push(assistantMessage);
 
-    if (stopReason !== "tool_use") {
-      break;
-    }
+      if (stopReason !== "tool_use") {
+        break;
+      }
 
-    // Execute tool calls
-    if (signal?.aborted) throw new Error("Task cancelled");
+      // Execute tool calls
+      if (signal?.aborted) throw new TaskCancelledError("Task cancelled", newMessages);
 
-    if (toolUseBlocks.length > 0) {
-      callbacks.onToolStart?.(toolUseBlocks.map((b) => b.name).join(", "));
+      if (toolUseBlocks.length > 0) {
+        callbacks.onToolStart?.(toolUseBlocks.map((b) => b.name).join(", "));
 
-      const toolResults: ToolResultBlock[] = await Promise.all(
-        toolUseBlocks.map(async (block) => {
-          if (signal?.aborted) {
+        const toolResults: ToolResultBlock[] = await Promise.all(
+          toolUseBlocks.map(async (block) => {
+            if (signal?.aborted) {
+              return {
+                type: "tool_result" as const,
+                tool_use_id: block.id,
+                content: "Task cancelled",
+                is_error: true,
+              };
+            }
+
+            console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
+            const toolExecutor = options?.toolExecutor ?? executeTool;
+            const { result, isError, terminatesLoop } = await toolExecutor(
+              block.name,
+              block.input as Record<string, unknown>
+            );
+
+            // Check if any tool requested early termination
+            if (terminatesLoop) {
+              earlyTermination = true;
+            }
+
             return {
               type: "tool_result" as const,
               tool_use_id: block.id,
-              content: "Task cancelled",
-              is_error: true,
+              content: result.slice(0, 50_000), // cap tool output
+              is_error: isError,
             };
-          }
+          })
+        );
 
-          console.log(`[tool] ${block.name}(${JSON.stringify(block.input)})`);
-          const toolExecutor = options?.toolExecutor ?? executeTool;
-          const { result, isError, terminatesLoop } = await toolExecutor(
-            block.name,
-            block.input as Record<string, unknown>
-          );
+        callbacks.onToolEnd?.(toolUseBlocks.map((b) => b.name).join(", "));
 
-          // Check if any tool requested early termination
-          if (terminatesLoop) {
-            earlyTermination = true;
-          }
+        if (signal?.aborted) throw new TaskCancelledError("Task cancelled", newMessages);
 
-          return {
-            type: "tool_result" as const,
-            tool_use_id: block.id,
-            content: result.slice(0, 50_000), // cap tool output
-            is_error: isError,
-          };
-        })
-      );
+        const toolResultMessage: Message = {
+          role: "user",
+          content: toolResults,
+        };
+        conversation.push(toolResultMessage);
+        newMessages.push(toolResultMessage);
 
-      callbacks.onToolEnd?.(toolUseBlocks.map((b) => b.name).join(", "));
-
-      if (signal?.aborted) throw new Error("Task cancelled");
-
-      const toolResultMessage: Message = {
-        role: "user",
-        content: toolResults,
-      };
-      conversation.push(toolResultMessage);
-      newMessages.push(toolResultMessage);
-
-      // If a tool requested early termination, break out of the loop
-      if (earlyTermination) {
-        break;
+        // If a tool requested early termination, break out of the loop
+        if (earlyTermination) {
+          break;
+        }
       }
+    } catch (err) {
+      // If abort fired mid-stream or mid-fetch, re-throw as TaskCancelledError with partial messages.
+      // This ensures all abort exit paths carry the accumulated messages for persistence.
+      if (signal?.aborted) {
+        throw new TaskCancelledError("Task cancelled", newMessages);
+      }
+      // If not an abort, re-throw the original error
+      throw err;
     }
   }
 

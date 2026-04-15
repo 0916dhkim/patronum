@@ -30,6 +30,10 @@ type ChatEvent =
 interface ChatState {
   queue: ChatEvent[];
   isProcessing: boolean;
+  /** Currently active stream controller for this chat, if processing */
+  activeController?: AbortController;
+  /** Message ID of the ForceReply prompt for /queue command, used to detect replies */
+  queueReplyTo?: number;
 }
 
 const chatStates = new Map<string, ChatState>();
@@ -232,6 +236,7 @@ export async function startBot(): Promise<void> {
   // -------------------------------------------------------------------
   bot.telegram.setMyCommands([
     { command: "status", description: "Show bot status" },
+    { command: "queue", description: "Queue a message to process after current inference" },
   ]).catch((err) => {
     console.error("[patronum] Failed to register bot commands:", err);
   });
@@ -279,6 +284,29 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  // -------------------------------------------------------------------
+  // Queue command handler: respond with ForceReply
+  // -------------------------------------------------------------------
+  bot.command("queue", async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    try {
+      const sentMsg = await ctx.reply("Reply with the message you want to queue.", {
+        reply_markup: {
+          force_reply: true,
+          selective: true,
+        },
+      });
+      
+      // Track the ForceReply message ID on this chat so we can detect replies to it
+      const state = getChatState(chatId);
+      state.queueReplyTo = sentMsg.message_id;
+      
+      console.log(`[queue] ForceReply sent to chat=${chatId}, message_id=${sentMsg.message_id}`);
+    } catch (err) {
+      console.error("[queue] Failed to send ForceReply:", err);
+    }
+  });
+
   // Message handler: enqueue events, don't block
   // -------------------------------------------------------------------
   bot.on("text", async (ctx) => {
@@ -297,8 +325,26 @@ export async function startBot(): Promise<void> {
     setCurrentChatId(chatId);
     setSendMediaChatId(chatId);
 
-    // Enqueue and process
+    // Check if this is a reply to a /queue ForceReply prompt
     const state = getChatState(chatId);
+    const isQueueReply = ctx.message.reply_to_message?.message_id === state.queueReplyTo;
+
+    // Decide: interrupt or queue
+    const shouldQueue = isQueueReply;
+
+    // If not queuing and currently processing, interrupt the active stream
+    if (!shouldQueue && state.isProcessing && state.activeController) {
+      console.log(`[steer] Interrupting active stream in chat=${chatId}`);
+      state.activeController.abort();
+    }
+
+    // If this was a queue reply, clear the tracked ForceReply ID
+    if (isQueueReply) {
+      state.queueReplyTo = undefined;
+      console.log(`[queue] Processing queued message in chat=${chatId}`);
+    }
+
+    // Enqueue and process
     state.queue.push({ type: "user_message", text: userText, ctx });
     processQueue(chatId, bot);
   });
@@ -319,6 +365,25 @@ export async function startBot(): Promise<void> {
 
     setCurrentChatId(chatId);
     setSendMediaChatId(chatId);
+
+    // Check if this is a reply to a /queue ForceReply prompt
+    const state = getChatState(chatId);
+    const isQueueReply = ctx.message.reply_to_message?.message_id === state.queueReplyTo;
+
+    // Decide: interrupt or queue
+    const shouldQueue = isQueueReply;
+
+    // If not queuing and currently processing, interrupt the active stream
+    if (!shouldQueue && state.isProcessing && state.activeController) {
+      console.log(`[steer] Interrupting active stream in chat=${chatId}`);
+      state.activeController.abort();
+    }
+
+    // If this was a queue reply, clear the tracked ForceReply ID
+    if (isQueueReply) {
+      state.queueReplyTo = undefined;
+      console.log(`[queue] Processing queued photo in chat=${chatId}`);
+    }
 
     // Take the largest photo size (last in array)
     const photos = ctx.message.photo;
@@ -344,7 +409,6 @@ export async function startBot(): Promise<void> {
       else if (url.includes(".gif")) mediaType = "image/gif";
       else if (url.includes(".webp")) mediaType = "image/webp";
 
-      const state = getChatState(chatId);
       state.queue.push({ type: "user_photo", caption, imageBase64, mediaType, ctx });
       processQueue(chatId, bot);
     } catch (err) {
@@ -607,6 +671,10 @@ async function handleEvent(
   // Create an AbortController for this stream and track it
   const streamController = new AbortController();
   activeStreamControllers.add(streamController);
+  
+  // Track this controller per-chat so message handlers can interrupt it
+  const state = getChatState(chatId);
+  state.activeController = streamController;
 
   try {
 
@@ -860,12 +928,44 @@ ${recallContent}
       }
     }
   } catch (err) {
-    // Check if this is an abort (graceful shutdown)
+    // Check if this is an abort (can be interrupt or graceful shutdown)
     // Check the signal itself, not error message, since AbortError from fetch may have different message
     if (streamController.signal.aborted) {
-      console.log(`[handleEvent] Stream aborted (graceful shutdown) in chat=${chatId}`);
-      // Finalize the draft with interruption notice
-      await draftStreamer.finalize();
+      // Determine whether this is a shutdown abort or user interrupt
+      const isShutdown = isShuttingDown;
+      
+      if (isShutdown) {
+        console.log(`[handleEvent] Stream aborted (graceful shutdown) in chat=${chatId}`);
+        // Finalize the draft with shutdown message
+        await draftStreamer.finalize("restarting");
+      } else {
+        // This is a user interrupt (steer)
+        console.log(`[handleEvent] Stream aborted (user interrupt) in chat=${chatId}`);
+        
+        // Extract partial messages from the error if available
+        let partialMessages: Message[] = [];
+        if (err instanceof Error && 'partialMessages' in err) {
+          partialMessages = (err as any).partialMessages || [];
+        }
+        
+        // Save partial messages to DB
+        if (partialMessages.length > 0) {
+          console.log(`[steer] Saving ${partialMessages.length} partial message(s) to DB`);
+          for (const msg of partialMessages) {
+            const messageToPersist: Message = {
+              ...msg,
+              content: Array.isArray(msg.content)
+                ? stripThinkingBlocks(msg.content)
+                : msg.content,
+            };
+            saveMessage(chatId, messageToPersist);
+          }
+        }
+        
+        // Finalize the draft with interrupt message
+        await draftStreamer.finalize("interrupted");
+      }
+      
       return; // Exit cleanly without throwing
     }
     // For other errors, re-throw to be handled by the generic error handler
@@ -876,5 +976,7 @@ ${recallContent}
     stopTyping();
     // Remove this controller from tracking
     activeStreamControllers.delete(streamController);
+    // Clear the per-chat controller reference
+    state.activeController = undefined;
   }
 }

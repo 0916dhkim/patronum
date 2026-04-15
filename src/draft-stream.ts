@@ -111,13 +111,14 @@ export class DraftStreamer {
   }
 
   /**
-   * Finalize the draft as a real message (for graceful shutdown).
+   * Finalize the draft as a real message (for graceful shutdown or interrupt).
    * If there's accumulated text, sends it with an interruption notice.
    * If no text, sends just the interruption notice.
    * Uses the same sendMessageSafe pattern as regular sends: try HTML, fall back to plain text on send failure.
+   * suffix parameter allows custom interruption message (defaults to "restarting").
    * No-op if already finalized.
    */
-  async finalize(): Promise<void> {
+  async finalize(suffix: string = "restarting"): Promise<void> {
     // Set flag synchronously BEFORE async work to prevent races
     if (this.finalized) return;
     this.finalized = true;
@@ -129,9 +130,9 @@ export class DraftStreamer {
     // Build message: accumulated text + interruption notice
     let messageText = "";
     if (accumulatedText) {
-      messageText = `${accumulatedText}\n\n⚠️ _Response interrupted — restarting_`;
+      messageText = `${accumulatedText}\n\n⚠️ _Response interrupted — ${suffix}_`;
     } else {
-      messageText = "⚠️ _Response interrupted — restarting_";
+      messageText = `⚠️ _Response interrupted — ${suffix}_`;
     }
 
     // Try HTML first (like sendMessageSafe pattern)
