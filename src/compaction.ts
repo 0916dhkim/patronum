@@ -5,14 +5,18 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const MODELS_API_URL = "https://api.anthropic.com/v1/models";
 const COMPACTION_MODEL = "claude-haiku-4-5-20251001";
 
-// Compaction triggers at 70% of the model's context window
-const COMPACTION_RATIO = 0.70;
+// Compaction triggers at 50% of the model's context window
+const COMPACTION_RATIO = 0.50;
 
 // Keep last ~20 messages verbatim during compaction
 const KEEP_RECENT_COUNT = 20;
 const MAX_TEXT_SNIPPET_CHARS = 800;
 const MAX_TOOL_INPUT_CHARS = 400;
 const MAX_TOOL_RESULT_CHARS = 400;
+
+// Max chars per chunk sent to Haiku for summarization.
+// Haiku has a 200k token context window; ~500k chars leaves headroom for system prompt + response.
+const HAIKU_TRANSCRIPT_CHUNK_CHARS = 500_000;
 
 const COMPACTION_SYSTEM_PROMPT = `You compact long-running agent conversations into a continuation-safe state summary.
 
@@ -33,6 +37,24 @@ Requirements:
 - Be concise, but do not omit continuation-critical context.
 - Use bullets where helpful inside sections.
 - Output only the markdown summary.`;
+
+const PROGRESSIVE_MERGE_PROMPT = `You are merging multiple sequential summaries of an agent conversation into one cohesive summary.
+Each chunk summary covers an earlier portion of the conversation, in order.
+
+Merge them into a single structured markdown summary using exactly these sections, in this order:
+
+## Current Objective
+## Important Context
+## Decisions Made
+## Open Issues
+## Active Files And Components
+## Pending Next Steps
+
+Requirements:
+- Resolve any conflicts by preferring information from later chunks (they are more recent).
+- Deduplicate redundant information.
+- Be concise but preserve all continuation-critical context.
+- Output only the merged markdown summary.`;
 
 // Cache: model id → context_window size
 const contextWindowCache = new Map<string, number>();
@@ -152,10 +174,12 @@ function safeJson(value: unknown): string {
 }
 
 /**
- * Call Claude (Haiku) to summarize a set of messages
+ * Call Haiku to summarize a single transcript string.
  */
-async function summarizeMessages(messages: Message[]): Promise<string> {
-  const transcript = messages.map(messageToText).join("\n\n");
+async function summarizeTranscript(transcript: string, isPartial: boolean): Promise<string> {
+  const userContent = isPartial
+    ? `Summarize this portion of an earlier conversation transcript for future continuation:\n\n${transcript}`
+    : `Summarize this earlier conversation transcript for future continuation:\n\n${transcript}`;
 
   const response = await fetch(API_URL, {
     method: "POST",
@@ -172,12 +196,7 @@ async function summarizeMessages(messages: Message[]): Promise<string> {
       model: COMPACTION_MODEL,
       max_tokens: 2048,
       system: COMPACTION_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: `Summarize this earlier conversation transcript for future continuation:\n\n${transcript}`,
-        },
-      ],
+      messages: [{ role: "user", content: userContent }],
     }),
   });
 
@@ -191,8 +210,85 @@ async function summarizeMessages(messages: Message[]): Promise<string> {
 }
 
 /**
- * Token-based compaction: triggers when input_tokens / context_window >= 70%.
+ * Call Haiku to merge multiple chunk summaries into one.
+ */
+async function mergeChunkSummaries(chunkSummaries: string[]): Promise<string> {
+  const merged = chunkSummaries
+    .map((s, i) => `### Chunk ${i + 1} Summary\n${s}`)
+    .join("\n\n");
+
+  const response = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.claudeToken}`,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "user-agent": "claude-cli/2.1.85",
+      "x-app": "cli",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: COMPACTION_MODEL,
+      max_tokens: 2048,
+      system: PROGRESSIVE_MERGE_PROMPT,
+      messages: [{ role: "user", content: `Merge these sequential conversation summaries:\n\n${merged}` }],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Compaction merge API error ${response.status}: ${body}`);
+  }
+
+  const data = (await response.json()) as { content: Array<{ type: string; text: string }> };
+  return data.content.find((b) => b.type === "text")?.text ?? "(merge unavailable)";
+}
+
+/**
+ * Summarize a set of messages, splitting into chunks if the transcript
+ * would exceed Haiku's context window. Merges chunk summaries into one.
+ */
+async function summarizeMessages(messages: Message[]): Promise<string> {
+  const messageTexts = messages.map(messageToText);
+
+  // Build chunks that fit within HAIKU_TRANSCRIPT_CHUNK_CHARS
+  const chunks: string[] = [];
+  let currentChunk = "";
+
+  for (const text of messageTexts) {
+    const separator = currentChunk ? "\n\n" : "";
+    if (currentChunk && (currentChunk.length + separator.length + text.length) > HAIKU_TRANSCRIPT_CHUNK_CHARS) {
+      chunks.push(currentChunk);
+      currentChunk = text;
+    } else {
+      currentChunk = currentChunk + separator + text;
+    }
+  }
+  if (currentChunk) chunks.push(currentChunk);
+
+  console.log(`[compaction] Summarizing ${messages.length} messages in ${chunks.length} chunk(s)`);
+
+  if (chunks.length === 1) {
+    return summarizeTranscript(chunks[0], false);
+  }
+
+  // Progressive: summarize each chunk, then merge
+  const chunkSummaries = await Promise.all(
+    chunks.map((chunk, i) => {
+      console.log(`[compaction] Summarizing chunk ${i + 1}/${chunks.length} (${chunk.length} chars)`);
+      return summarizeTranscript(chunk, true);
+    })
+  );
+
+  console.log(`[compaction] Merging ${chunkSummaries.length} chunk summaries`);
+  return mergeChunkSummaries(chunkSummaries);
+}
+
+/**
+ * Token-based compaction: triggers when input_tokens / context_window >= 50%.
  * Keeps the last KEEP_RECENT_COUNT messages verbatim, summarizes the rest with Haiku.
+ * Uses progressive chunked summarization to handle transcripts larger than Haiku's context window.
  * Returns the (possibly compacted) message array.
  */
 export async function compactIfNeeded(
