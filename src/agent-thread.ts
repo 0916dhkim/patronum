@@ -101,6 +101,25 @@ export function findThread(
   return result || null;
 }
 
+/**
+ * Find a thread by chat ID and name, regardless of status.
+ * Used for forensics/debugging tools that need to inspect closed threads.
+ */
+export function findThreadAnyStatus(
+  chatId: string,
+  name: string
+): { id: string; name: string } | null {
+  const result = db
+    .prepare(
+      `SELECT id, name FROM agent_threads
+       WHERE chat_id = ? AND name = ?
+       LIMIT 1`
+    )
+    .get(chatId, name) as { id: string; name: string } | undefined;
+
+  return result || null;
+}
+
 export function appendToAgentThread(
   threadId: string,
   author: string,

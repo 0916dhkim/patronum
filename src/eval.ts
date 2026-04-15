@@ -10,7 +10,7 @@ import { loadAllTests, loadTest, filterByTags, type EvalTest } from "./eval/load
 import { runAllTests, runTest } from "./eval/runner.js";
 import { saveResults, loadRecentResults } from "./eval/results.js";
 import { compareRuns } from "./eval/compare.js";
-import { loadSubagentMessages, findThread } from "./agent-thread.js";
+import { loadSubagentMessages, findThreadAnyStatus } from "./agent-thread.js";
 import type { Message } from "./types.js";
 
 export interface PromptOverrides {
@@ -168,60 +168,101 @@ async function dumpSubagentFixture(
   outputPath?: string
 ): Promise<number> {
   try {
-    // Look up thread ID by chat ID and name
-    const thread = findThread(chatId, threadName);
-    if (!thread) {
-      console.error(`❌ Thread not found: chat_id=${chatId}, name=${threadName}`);
+    // Open database directly (same pattern as dumpFixture)
+    const dbPath = path.join(config.workspace, "patronum.db");
+    if (!existsSync(dbPath)) {
+      console.error(`❌ Database not found: ${dbPath}`);
       return 1;
     }
 
-    // Load subagent messages, optionally filtered by agent name
-    const runs = loadSubagentMessages(thread.id, agentName);
+    const db = new Database(dbPath, { readonly: true });
 
-    if (runs.length === 0) {
-      console.log(`⚠️  No subagent runs found for thread ${threadName}${agentName ? ` (agent: ${agentName})` : ""}`);
-      return 1;
+    try {
+      // Look up thread ID by chat ID and name (search all statuses, not just active)
+      const threadResult = db
+        .prepare(
+          `SELECT id, name FROM agent_threads
+           WHERE chat_id = ? AND name = ?
+           LIMIT 1`
+        )
+        .get(chatId, threadName) as { id: string; name: string } | undefined;
+
+      if (!threadResult) {
+        console.error(`❌ Thread not found: chat_id=${chatId}, name=${threadName}`);
+        return 1;
+      }
+
+      // Load subagent messages from the database
+      const query = agentName
+        ? `SELECT agent_name, internal_messages_json
+           FROM subagent_internal_messages
+           WHERE thread_id = ? AND agent_name = ?
+           ORDER BY rowid ASC`
+        : `SELECT agent_name, internal_messages_json
+           FROM subagent_internal_messages
+           WHERE thread_id = ?
+           ORDER BY rowid ASC`;
+
+      const rows = (
+        agentName
+          ? db.prepare(query).all(threadResult.id, agentName)
+          : db.prepare(query).all(threadResult.id)
+      ) as Array<{ agent_name: string; internal_messages_json: string }>;
+
+      const runs = rows.map((row) => ({
+        agentName: row.agent_name,
+        messages: JSON.parse(row.internal_messages_json) as Message[],
+      }));
+
+      if (runs.length === 0) {
+        console.log(
+          `⚠️  No subagent runs found for thread ${threadName}${agentName ? ` (agent: ${agentName})` : ""}`
+        );
+        return 1;
+      }
+
+      // If multiple runs and no agent filter, ask user to pick or combine them
+      if (runs.length > 1 && !agentName) {
+        console.log(`Found ${runs.length} runs for thread ${threadName}:`);
+        runs.forEach((run, i) => {
+          console.log(`  [${i}] ${run.agentName}`);
+        });
+        console.log("");
+        console.log("Tip: Specify --agent <name> to filter by agent, or use index [0], [1], etc. for now.");
+        console.log("For now, dumping all runs combined...");
+        console.log("");
+      }
+
+      // Flatten all runs into a single fixture
+      const allMessages: Message[] = runs.flatMap((run) => run.messages);
+
+      // Determine output path
+      const finalOutputPath =
+        outputPath || path.join(config.workspace, "tests", "fixtures", `${threadName}-subagent.json`);
+      const outputDir = path.dirname(finalOutputPath);
+
+      mkdirSync(outputDir, { recursive: true });
+
+      // Write to file
+      writeFileSync(finalOutputPath, JSON.stringify(allMessages, null, 2), "utf-8");
+
+      // Report results
+      console.log(
+        `✅ Dumped ${allMessages.length} message(s) from ${runs.length} run(s) to: ${finalOutputPath}`
+      );
+      if (allMessages.length > 0) {
+        console.log("");
+        console.log("First entry:");
+        console.log(JSON.stringify(allMessages[0], null, 2).split("\n").slice(0, 5).join("\n"));
+        console.log("");
+        console.log("Last entry:");
+        console.log(JSON.stringify(allMessages[allMessages.length - 1], null, 2).split("\n").slice(0, 5).join("\n"));
+      }
+
+      return 0;
+    } finally {
+      db.close();
     }
-
-    // If multiple runs and no agent filter, ask user to pick or combine them
-    if (runs.length > 1 && !agentName) {
-      console.log(`Found ${runs.length} runs for thread ${threadName}:`);
-      runs.forEach((run, i) => {
-        console.log(`  [${i}] ${run.agentName}`);
-      });
-      console.log("");
-      console.log("Tip: Specify --agent <name> to filter by agent, or use index [0], [1], etc. for now.");
-      console.log("For now, dumping all runs combined...");
-      console.log("");
-    }
-
-    // Flatten all runs into a single fixture
-    const allMessages: Message[] = runs.flatMap((run) => run.messages);
-
-    // Determine output path
-    const finalOutputPath =
-      outputPath || path.join(config.workspace, "tests", "fixtures", `${threadName}-subagent.json`);
-    const outputDir = path.dirname(finalOutputPath);
-
-    mkdirSync(outputDir, { recursive: true });
-
-    // Write to file
-    writeFileSync(finalOutputPath, JSON.stringify(allMessages, null, 2), "utf-8");
-
-    // Report results
-    console.log(
-      `✅ Dumped ${allMessages.length} message(s) from ${runs.length} run(s) to: ${finalOutputPath}`
-    );
-    if (allMessages.length > 0) {
-      console.log("");
-      console.log("First entry:");
-      console.log(JSON.stringify(allMessages[0], null, 2).split("\n").slice(0, 5).join("\n"));
-      console.log("");
-      console.log("Last entry:");
-      console.log(JSON.stringify(allMessages[allMessages.length - 1], null, 2).split("\n").slice(0, 5).join("\n"));
-    }
-
-    return 0;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`❌ Error dumping subagent fixture: ${msg}`);
