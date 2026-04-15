@@ -327,7 +327,7 @@ export async function startBot(): Promise<void> {
 
     // Check if this is a reply to a /queue ForceReply prompt
     const state = getChatState(chatId);
-    const isQueueReply = ctx.message.reply_to_message?.message_id === state.queueReplyTo;
+    const isQueueReply = state.queueReplyTo !== undefined && ctx.message.reply_to_message?.message_id === state.queueReplyTo;
 
     // Decide: interrupt or queue
     const shouldQueue = isQueueReply;
@@ -368,7 +368,7 @@ export async function startBot(): Promise<void> {
 
     // Check if this is a reply to a /queue ForceReply prompt
     const state = getChatState(chatId);
-    const isQueueReply = ctx.message.reply_to_message?.message_id === state.queueReplyTo;
+    const isQueueReply = state.queueReplyTo !== undefined && ctx.message.reply_to_message?.message_id === state.queueReplyTo;
 
     // Decide: interrupt or queue
     const shouldQueue = isQueueReply;
