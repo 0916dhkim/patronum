@@ -18,7 +18,7 @@ import type {
 
 
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MAX_TOKENS = 32000;
+const MAX_TOKENS = 48000; // Must be greater than thinking budget_tokens (32000) + output capacity
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
@@ -80,10 +80,7 @@ async function callClaudeForAgent(
   // Add thinking if enabled for this agent — but NOT when tool_choice forces a specific tool,
   // as the Anthropic API does not allow thinking + forced tool_choice simultaneously.
   if (agent.thinking && toolChoice?.type !== "tool") {
-    body.thinking = { type: "adaptive" };
-    if (agent.thinkingEffort) {
-      body.output_config = { effort: agent.thinkingEffort };
-    }
+    body.thinking = { type: "enabled", budget_tokens: 32000 };
   }
 
   const response = await fetch(API_URL, {

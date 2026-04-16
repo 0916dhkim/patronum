@@ -24,7 +24,7 @@ import type {
 } from "./types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
-const MAX_TOKENS = 16000;
+const MAX_TOKENS = 48000; // Must be greater than thinking budget_tokens (32000) + output capacity
 const API_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes hard timeout on API calls
 
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
@@ -50,10 +50,8 @@ export interface AgentOptions {
   soulContent?: string;
   /** Override AGENTS.md content (eval-only) */
   agentsContent?: string;
-  /** Enable adaptive thinking mode */
+  /** Enable extended thinking mode */
   thinking?: boolean;
-  /** Thinking effort level: "low" | "medium" | "high" (only used when thinking is true) */
-  thinkingEffort?: "low" | "medium" | "high";
 }
 
 export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
@@ -110,10 +108,7 @@ async function callClaude(
   };
 
   if (options?.thinking) {
-    body.thinking = { type: "adaptive" };
-    if (options?.thinkingEffort) {
-      body.output_config = { effort: options.thinkingEffort };
-    }
+    body.thinking = { type: "enabled", budget_tokens: 32000 };
   }
 
   // Compose caller signal with 30-minute timeout
@@ -172,10 +167,7 @@ async function callClaudeStreaming(
   };
 
   if (options?.thinking) {
-    body.thinking = { type: "adaptive" };
-    if (options?.thinkingEffort) {
-      body.output_config = { effort: options.thinkingEffort };
-    }
+    body.thinking = { type: "enabled", budget_tokens: 32000 };
   }
 
   // Compose caller signal with 30-minute timeout
