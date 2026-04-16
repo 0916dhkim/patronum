@@ -13,6 +13,7 @@ import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
 import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
 import { stripThinkingBlocks } from "./prompt-cache.js";
+import { transcribeAudio } from "./whisper.js";
 import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
@@ -24,6 +25,7 @@ const TELEGRAM_MSG_LIMIT = 4096;
 type ChatEvent =
   | { type: "user_message"; text: string; ctx: import("telegraf").Context }
   | { type: "user_photo"; caption: string; imageBase64: string; mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; ctx: import("telegraf").Context }
+  | { type: "user_voice"; text: string; ctx: import("telegraf").Context }
   | { type: "agent_completion"; taskId: string; agent: string; result: string; threadName: string }
   | { type: "agent_failure"; taskId: string; agent: string; error: string; threadName: string };
 
@@ -417,6 +419,104 @@ export async function startBot(): Promise<void> {
     }
   });
 
+  // Voice handler: download voice message, transcribe via Whisper, enqueue transcribed text
+  // -------------------------------------------------------------------
+  bot.on("voice", async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    const msgTime = ctx.message.date;
+
+    if (msgTime < BOT_START_TIME - 5) {
+      console.log(`[msg] dropped stale voice message (age=${BOT_START_TIME - msgTime}s)`);
+      return;
+    }
+
+    console.log(`[msg] chat=${chatId}: voice message (duration=${ctx.message.voice.duration}s)`);
+
+    setCurrentChatId(chatId);
+    setSendMediaChatId(chatId);
+
+    // Check if OpenAI API key is configured
+    if (!config.openaiApiKey) {
+      console.log(`[voice] OpenAI API key not configured, skipping voice message in chat=${chatId}`);
+      try {
+        await ctx.reply("Voice input is not supported");
+      } catch (err) {
+        console.error("[voice] Failed to send unsupported message:", err);
+      }
+      return;
+    }
+
+    // Check if this is a reply to a /queue ForceReply prompt
+    const state = getChatState(chatId);
+    const isQueueReply = state.queueReplyTo !== undefined && ctx.message.reply_to_message?.message_id === state.queueReplyTo;
+
+    // Decide: interrupt or queue
+    const shouldQueue = isQueueReply;
+
+    // If not queuing and currently processing, interrupt the active stream
+    if (!shouldQueue && state.isProcessing && state.activeController) {
+      console.log(`[steer] Interrupting active stream in chat=${chatId}`);
+      state.activeController.abort();
+    }
+
+    // If this was a queue reply, clear the tracked ForceReply ID
+    if (isQueueReply) {
+      state.queueReplyTo = undefined;
+      console.log(`[queue] Processing queued voice message in chat=${chatId}`);
+    }
+
+    try {
+      // Download the voice file
+      const fileLink = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
+      const response = await fetch(fileLink.href);
+
+      if (!response.ok) {
+        console.error(`[voice] Failed to download audio: ${response.status}`);
+        await ctx.reply("Failed to download voice message.");
+        return;
+      }
+
+      const audioBuffer = Buffer.from(await response.arrayBuffer());
+
+      // Transcribe via Whisper
+      let transcription: string;
+      try {
+        transcription = await transcribeAudio(audioBuffer, config.openaiApiKey);
+      } catch (transcribeErr) {
+        const errMsg = transcribeErr instanceof Error ? transcribeErr.message : String(transcribeErr);
+        console.error(`[voice] Transcription failed:`, errMsg);
+        await ctx.reply(`Failed to transcribe voice message: ${errMsg.slice(0, 100)}`);
+        return;
+      }
+
+      // Check if transcription is empty
+      if (!transcription || !transcription.trim()) {
+        console.log(`[voice] Empty transcription in chat=${chatId}`);
+        await ctx.reply("Couldn't transcribe the voice message (no speech detected).");
+        return;
+      }
+
+      // Send transparency confirmation message with transcribed text
+      const confirmationMsg = `🎤 *"${transcription}"*`;
+      try {
+        await sendMessageSafe(bot, chatId, confirmationMsg);
+      } catch (err) {
+        console.error(`[voice] Failed to send confirmation message:`, err);
+        // Don't return — still proceed to enqueue the transcribed text
+      }
+
+      // Enqueue the transcribed text as a user message
+      state.queue.push({ type: "user_voice", text: transcription, ctx });
+      processQueue(chatId, bot);
+    } catch (err) {
+      console.error(`[voice] Error processing voice message:`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      try { 
+        await ctx.reply(`Error processing voice message: ${errMsg.slice(0, 100)}`);
+      } catch { /* ignore */ }
+    }
+  });
+
   // Graceful shutdown — register before launch so it catches signals
   const shutdown = async (signal: string) => {
     // Hard-kill safety timeout: if graceful shutdown takes > 10 seconds, force exit
@@ -681,7 +781,7 @@ async function handleEvent(
   // Load session history
   const history = loadHistory(chatId);
 
-  // For user messages (text or photo), add to session history
+  // For user messages (text, voice, or photo), add to session history
   if (event.type === "user_message") {
     // Auto-recall: try to retrieve relevant memory context
     let recallContent: string | null = null;
@@ -707,6 +807,33 @@ ${recallContent}
     history.push(userMessage);
 
     // Save original text to DB (not augmented)
+    const storageMessage: Message = { role: "user", content: event.text };
+    saveMessage(chatId, storageMessage);
+  } else if (event.type === "user_voice") {
+    // Voice message transcription — process like text message
+    let recallContent: string | null = null;
+    if (config.voyageApiKey) {
+      recallContent = await autoRecall(event.text);
+    }
+
+    let messageContent = event.text;
+    if (recallContent) {
+      // Augment the message with memory context
+      messageContent = `${event.text}
+
+<memory_context>
+Automatically retrieved memory fragments that may be relevant to this message.
+These are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.
+
+${recallContent}
+</memory_context>`;
+    }
+
+    // Push augmented version to history (in-memory for this turn)
+    const userMessage: Message = { role: "user", content: messageContent };
+    history.push(userMessage);
+
+    // Save to DB
     const storageMessage: Message = { role: "user", content: event.text };
     saveMessage(chatId, storageMessage);
   } else if (event.type === "user_photo") {
@@ -912,9 +1039,14 @@ ${recallContent}
       }
 
       // Post-turn: index this exchange into vector memory
-      if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_photo")) {
+      if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_voice" || event.type === "user_photo")) {
         // Fire-and-forget — don't block the reply
-        const exchangeText = event.type === "user_message" ? event.text : event.caption;
+        let exchangeText = "";
+        if (event.type === "user_message" || event.type === "user_voice") {
+          exchangeText = event.text;
+        } else {
+          exchangeText = event.caption;
+        }
         indexExchange(chatId, exchangeText, newMessages).catch((err) => {
           console.error(`[bot] Failed to index exchange:`, err);
         });
