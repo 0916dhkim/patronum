@@ -17,8 +17,8 @@ export interface AgentTask {
   abortController: AbortController;
 }
 
-/** Maximum characters for agent output before truncation */
-const MAX_RESULT_CHARS = 10_000;
+/** Maximum characters for agent output before truncation (aligned with agent result preview) */
+const MAX_RESULT_CHARS = 8_000;
 
 /** How long to keep completed/failed/cancelled tasks before cleanup (30 minutes) */
 const TASK_TTL_MS = 30 * 60 * 1000;

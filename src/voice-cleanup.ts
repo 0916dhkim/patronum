@@ -33,7 +33,7 @@ You are given:
 Output only the cleaned text, nothing else. If the transcription is already correct, output it unchanged.
 
 Known technical terms and domain vocabulary:
-Claude, Anthropic, GPT-4o, Haiku, Sonnet, Opus, TypeScript, Telegram, SearXNG, Patronum, Vaultwarden, TOML, SQLite, API, REST, JSON, Whisper, OpenAI, Visa, Visa Infinite, voice message, GitHub, pull request, code review, commit, fork, repository, branch, merge`;
+Claude, Anthropic, GPT-4o, Haiku, Sonnet, Opus, TypeScript, Telegram, SearXNG, Patronum, Vaultwarden, TOML, SQLite, API, REST, JSON, Whisper, OpenAI, Visa, Visa Infinite, voice message, GitHub, code review`;
 
 /**
  * Format recent history messages for the cleanup context.
@@ -87,9 +87,7 @@ function extractTextContent(content: string | any[]): string {
 
 /**
  * Clean up a raw Whisper transcription using Haiku.
- * Includes recent conversation history for disambiguation context.
- * Uses cache-friendly prompt structure with static system content
- * and dynamic user content for efficient repeated calls.
+ * Includes recent conversation history (last 4 exchanges) for disambiguation context.
  *
  * Returns the cleaned transcript, or the original on error (fail gracefully).
  */
