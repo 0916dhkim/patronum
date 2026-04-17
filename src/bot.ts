@@ -18,7 +18,6 @@ import { cleanupVoiceTranscript } from "./voice-cleanup.js";
 import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
-const AGENT_RESULT_PREVIEW_CHARS = 8000; // Preview limit for agent results in notifications
 
 // ---------------------------------------------------------------------------
 // Per-chat event queue types
@@ -898,22 +897,9 @@ ${recallContent}
       // Special case: restart resume is informational context, not a task completion
       // Frame it as state description, not action items to execute
       // Include restart reason in the framing so it's not lost
-      let preview = event.result;
-      let truncationNote = "";
-      if (preview.length > AGENT_RESULT_PREVIEW_CHARS) {
-        const originalLength = event.result.length;
-        preview = preview.slice(0, AGENT_RESULT_PREVIEW_CHARS);
-        truncationNote = `\n\n[truncated — original was ${originalLength} chars]`;
-      }
-      systemText = `[system] You just restarted (reason: ${lastRestartReason || "unknown"}). Here's what you were working on before the restart. Time has passed since the restart — assess whether this context is still relevant before acting on anything.\n\nResume context: ${preview}${truncationNote}`;
+      systemText = `[system] You just restarted (reason: ${lastRestartReason || "unknown"}). Here's what you were working on before the restart. Time has passed since the restart — assess whether this context is still relevant before acting on anything.\n\nResume context: ${event.result}`;
     } else if (event.type === "agent_completion") {
-      let preview = event.result;
-      let truncationNote = "";
-      if (preview.length > AGENT_RESULT_PREVIEW_CHARS) {
-        preview = preview.slice(0, AGENT_RESULT_PREVIEW_CHARS);
-        truncationNote = `\n\n[truncated — read_agent_thread('${event.threadName}') for full context]`;
-      }
-      systemText = `[system] Background task completed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nResult: ${preview}${truncationNote}`;
+      systemText = `[system] Background task completed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nResult: ${event.result}`;
     } else {
       systemText = `[system] Background task failed: ${event.agent} (${event.taskId})\nThread: ${event.threadName}\nError: ${event.error}`;
     }
