@@ -14,6 +14,7 @@ import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
 import { stripThinkingBlocks } from "./prompt-cache.js";
 import { transcribeAudio } from "./whisper.js";
+import { cleanupVoiceTranscript } from "./voice-cleanup.js";
 import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
@@ -479,9 +480,9 @@ export async function startBot(): Promise<void> {
       const audioBuffer = Buffer.from(await response.arrayBuffer());
 
       // Transcribe via Whisper
-      let transcription: string;
+      let rawTranscription: string;
       try {
-        transcription = await transcribeAudio(audioBuffer, config.openaiApiKey);
+        rawTranscription = await transcribeAudio(audioBuffer, config.openaiApiKey);
       } catch (transcribeErr) {
         const errMsg = transcribeErr instanceof Error ? transcribeErr.message : String(transcribeErr);
         console.error(`[voice] Transcription failed:`, errMsg);
@@ -490,14 +491,19 @@ export async function startBot(): Promise<void> {
       }
 
       // Check if transcription is empty
-      if (!transcription || !transcription.trim()) {
+      if (!rawTranscription || !rawTranscription.trim()) {
         console.log(`[voice] Empty transcription in chat=${chatId}`);
         await ctx.reply("Couldn't transcribe the voice message (no speech detected).");
         return;
       }
 
-      // Send transparency confirmation message with transcribed text
-      const confirmationMsg = `🎤 *"${transcription}"*`;
+      // Clean up transcription errors with Haiku (Layer 2 cleanup pass)
+      // Load recent history for disambiguation context
+      const currentHistory = loadHistory(chatId);
+      const cleanedTranscription = await cleanupVoiceTranscript(rawTranscription, currentHistory);
+
+      // Send transparency confirmation message with cleaned text
+      const confirmationMsg = `🎤 *"${cleanedTranscription}"*`;
       try {
         await sendMessageSafe(bot, chatId, confirmationMsg);
       } catch (err) {
@@ -505,8 +511,8 @@ export async function startBot(): Promise<void> {
         // Don't return — still proceed to enqueue the transcribed text
       }
 
-      // Enqueue the transcribed text as a user message
-      state.queue.push({ type: "user_voice", text: transcription, ctx });
+      // Enqueue the cleaned text as a user message
+      state.queue.push({ type: "user_voice", text: cleanedTranscription, ctx });
       processQueue(chatId, bot);
     } catch (err) {
       console.error(`[voice] Error processing voice message:`, err);
