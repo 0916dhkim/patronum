@@ -890,7 +890,6 @@ ${recallContent}
     saveMessage(chatId, storageMessage);
   } else {
     // For agent events, inject a synthetic user message so Lin can respond
-    // NOT saved to DB — agent thread is the permanent record
     let systemText: string;
     
     if (event.taskId === "restart-resume" && event.type === "agent_completion") {
@@ -906,7 +905,7 @@ ${recallContent}
 
     const syntheticMessage: Message = { role: "user", content: systemText };
     history.push(syntheticMessage);
-    // NOT saved to DB
+    saveMessage(chatId, syntheticMessage);
   }
 
   // Run Lin with streaming responses
