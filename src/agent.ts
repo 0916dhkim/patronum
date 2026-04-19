@@ -595,7 +595,37 @@ function sanitizeMessages(messages: Message[]): Message[] {
     result.shift();
   }
 
-  return result;
+  // Second pass: enforce strict role alternation by merging consecutive same-role messages.
+  // The orphaned tool_use/tool_result stripping can leave adjacent messages with the same role.
+  // Merge them to maintain the alternation requirement.
+  const merged: Message[] = [];
+  for (let i = 0; i < result.length; i++) {
+    const current = result[i];
+
+    // If we have no previous message, or the roles differ, just add the current message
+    if (merged.length === 0 || merged[merged.length - 1].role !== current.role) {
+      merged.push(current);
+      continue;
+    }
+
+    // Same role as the previous message — merge them
+    const previous = merged[merged.length - 1];
+    console.warn(`[sanitize] Merging consecutive ${current.role} messages at indices ${i - 1} and ${i}`);
+
+    // Normalize both messages' content to ContentBlock[] form
+    const prevContent = Array.isArray(previous.content)
+      ? previous.content
+      : [{ type: "text" as const, text: previous.content }];
+
+    const currentContent = Array.isArray(current.content)
+      ? current.content
+      : [{ type: "text" as const, text: current.content }];
+
+    // Merge by concatenating content arrays
+    previous.content = [...prevContent, ...currentContent];
+  }
+
+  return merged;
 }
 
 export async function runAgent(messages: Message[], options?: AgentOptions, signal?: AbortSignal): Promise<AgentResult> {
