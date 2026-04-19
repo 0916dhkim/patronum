@@ -17,8 +17,6 @@ export interface AgentTask {
   abortController: AbortController;
 }
 
-
-
 /** How long to keep completed/failed/cancelled tasks before cleanup (30 minutes) */
 const TASK_TTL_MS = 30 * 60 * 1000;
 

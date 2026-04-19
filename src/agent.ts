@@ -482,14 +482,15 @@ export async function runAgentStreaming(
 }
 
 /**
- * Sanitize message history to ensure every tool_result has a matching tool_use
- * in the immediately preceding assistant message. Claude's API requires this
- * strict pairing — orphaned tool_results cause 400 errors.
+ * Sanitize message history to ensure strict tool_use/tool_result pairing.
+ * Claude's API requires every tool_use block to have a corresponding
+ * tool_result in the immediately following user message, and vice versa.
  *
  * This can happen when:
  * - loadHistory's LIMIT cuts mid tool-call pair
  * - compaction splits between a tool_use and its tool_result
- * - async event triggers a new Lin turn with stale history
+ * - async event triggers a new turn with stale history
+ * - a crash or timeout occurs mid tool execution
  */
 function sanitizeMessages(messages: Message[]): Message[] {
   const result: Message[] = [];
@@ -538,6 +539,49 @@ function sanitizeMessages(messages: Message[]): Message[] {
 
         result.push({ role: msg.role, content: validResults });
         continue;
+      }
+    }
+
+    // Check assistant messages that contain tool_use blocks — ensure the
+    // next message provides matching tool_results. Orphaned tool_use blocks
+    // (no tool_result follows) also cause 400 errors from the Claude API.
+    if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      const toolUseBlocks = msg.content.filter(
+        (b): b is ToolUseBlock => b.type === "tool_use"
+      );
+
+      if (toolUseBlocks.length > 0) {
+        const nextMsg = i + 1 < messages.length ? messages[i + 1] : null;
+        const nextToolResultIds = new Set<string>();
+        if (nextMsg && nextMsg.role === "user" && Array.isArray(nextMsg.content)) {
+          for (const b of nextMsg.content) {
+            if (b.type === "tool_result") {
+              nextToolResultIds.add((b as ToolResultBlock).tool_use_id);
+            }
+          }
+        }
+
+        const orphanedToolUseIds = toolUseBlocks
+          .filter((b) => !nextToolResultIds.has(b.id))
+          .map((b) => b.id);
+
+        if (orphanedToolUseIds.length > 0) {
+          const cleanedContent = msg.content.filter((b) => {
+            if (b.type !== "tool_use") return true;
+            const orphaned = orphanedToolUseIds.includes((b as ToolUseBlock).id);
+            if (orphaned) {
+              console.warn(`[sanitize] Stripping orphaned tool_use id=${(b as ToolUseBlock).id}`);
+            }
+            return !orphaned;
+          });
+
+          if (cleanedContent.length > 0) {
+            result.push({ role: msg.role, content: cleanedContent });
+          } else {
+            console.warn(`[sanitize] Dropping assistant message at index ${i} — only contained orphaned tool_use blocks`);
+          }
+          continue;
+        }
       }
     }
 

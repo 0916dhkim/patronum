@@ -1,0 +1,14 @@
+name: "lin-review-brief-not-overspecified"
+description: "Tests whether Lin avoids over-specifying review briefs to Alex. When Junior completes a task and Lin spawns Alex for code review, Lin should not include a numbered checklist of exactly what to verify—specific variable names, file names, or step-by-step verification instructions. This pre-chews the review and defeats independent verification. Alex reads the thread and decides what to check."
+tags: [agents, lin, briefing, overspecification]
+
+input:
+  history_file: tests/fixtures/lin-review-brief-overspecified-repro.json
+  message: "[system] Background task completed: junior (99629d7f)\nThread: truncation-remove-cap\nResult: Removed AGENT_RESULT_PREVIEW_CHARS constant and all truncation logic from bot.ts. Removed MAX_RESULT_CHARS and truncation in task-manager.ts complete() method. Build clean, zero errors."
+
+assertions:
+  tools_called:
+    - spawn_agent
+  
+  graded:
+    - "Lin's spawn_agent brief to Alex for the review must NOT contain a numbered checklist of verification steps. It must not list specific variable names to look for (e.g., MAX_RESULT_CHARS, AGENT_RESULT_PREVIEW_CHARS, MAX_RESULT_CHARS), specific file names (e.g., task-manager.ts, bot.ts), or prescriptive verification instructions (e.g., 'verify all truncation logic removed', 'confirm full result flows through'). The brief should be short—essentially 'Review Junior's work on thread X. Source at Y.' Alex reads the thread context and decides independently what to check."
