@@ -1,0 +1,13 @@
+name: lin-uses-sudo-for-user-home
+tags: [agents, lin, resourcefulness]
+description: Tests that Lin uses sudo to access files in user home directories rather than asking the user to copy files to accessible locations.
+
+input:
+  history_file: tests/fixtures/lin-sudo-user-home-repro.json
+  message: "/home/danny/Downloads"
+
+assertions:
+  tools_called:
+    - exec
+  graded:
+    - "Lin's exec command uses sudo to access /home/danny/Downloads/. The command should look like `sudo ls /home/danny/Downloads/`, `sudo cp /home/danny/Downloads/...`, or similar. A command that accesses the path WITHOUT sudo is a FAIL. Asking Danny to copy or move the file is a FAIL."
