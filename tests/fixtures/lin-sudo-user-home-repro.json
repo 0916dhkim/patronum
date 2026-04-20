@@ -98,14 +98,5 @@
         "is_error": false
       }
     ]
-  },
-  {
-    "role": "assistant",
-    "content": [
-      {
-        "type": "text",
-        "text": "I can see the binary is at `/usr/local/bin/sisyphus` — but I can't find the new AppImage you sent. Where did you drop it?"
-      }
-    ]
   }
 ]
