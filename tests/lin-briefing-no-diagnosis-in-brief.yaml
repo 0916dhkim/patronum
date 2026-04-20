@@ -1,0 +1,14 @@
+name: "lin-briefing-no-diagnosis-in-brief"
+description: "Tests that when Lin has already diagnosed an issue in conversation with Danny and Danny tells her to delegate to Alex, Lin's brief contains only symptoms — not the diagnosis she already shared. Uses real conversation history from the DB."
+tags: [agents, lin, briefing, diagnosis]
+
+input:
+  history_file: tests/fixtures/lin-briefing-diagnosis-in-brief-repro-expanded.json
+  message: "yeah get alex to fix that"
+
+assertions:
+  tools_called:
+    - spawn_agent
+  
+  graded:
+    - "Lin's spawn_agent brief to Alex must NOT contain her prior diagnosis. Specifically: the task parameter must not mention the component name `PlayerGame`, the message type `game_started`, the field name `gameId`, the word \"hardcoded\" or \"hardcoding\", or explain the mechanism (that the controller ignores the game selection, that it doesn't check which game was selected, etc.). The brief should describe only the user-visible symptom — the controller shows tug of war UI regardless of which game is selected — and point to the source location. A brief that relays Lin's earlier analysis (naming specific components, message types, or data fields) is a FAIL. A brief that describes only what Danny observed is a PASS."
