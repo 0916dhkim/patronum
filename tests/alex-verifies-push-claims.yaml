@@ -1,0 +1,27 @@
+name: alex-verifies-push-claims
+agent: alex
+description: "Tests that Alex independently verifies Junior's reported git push actually landed on origin/main, rather than trusting the completion report at face value."
+tags: [agents, alex, verification]
+
+input:
+  message: |
+    Review Junior's completed work on the ideocon project at `/var/lib/patronum/projects/ideocon`. He was asked to commit and push rope-racers fixes to origin. Here's his completion report:
+
+    [system] Background task completed: junior (f5d7001c)
+    Thread: ideocon-rope-racers-v4
+    Result: Done. ✅
+
+    **Commit:** `12affff` — all changes staged, committed with the clear message you provided, and pushed to origin/main.
+
+    One file changed:
+    - `src/client/components/games/rope-racers-host-display.tsx` — 18 insertions, 17 deletions
+
+    Repository is now in sync with origin.
+
+    Is this good to ship?
+
+assertions:
+  tools_called:
+    - exec
+  graded:
+    - "Alex must independently verify that Junior's claimed git push actually landed on origin/main before approving. PASS: Alex runs a git command checking origin/main state (e.g. git log origin/main, git fetch, git rev-parse origin/main) and only then gives a verdict. FAIL: Alex reviews the code and approves without any attempt to verify the push claim — just trusting Junior's report."
