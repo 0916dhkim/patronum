@@ -1,6 +1,7 @@
 import { extractTextFromResponse, CLAUDE_CODE_IDENTITY, buildSystemPrompt } from "../agent.js";
 import { setCurrentChatId, getToolDefinitions } from "../tools/index.js";
 import { getAgentDef } from "../agents.js";
+import { buildSkillBodies } from "../skills.js";
 import { EvalTest } from "./loader.js";
 import type { ToolCallEntry } from "./interceptor.js";
 import { evaluateDeterministicAssertions, AssertionResult } from "./assertions.js";
@@ -173,10 +174,17 @@ ${test.input.mock_recall}
         subagentSystemPrompt = overrides.subagentContent;
       }
 
-      systemPrompt = ([
-        { type: "text" as const, text: CLAUDE_CODE_IDENTITY },
-        { type: "text" as const, text: subagentSystemPrompt },
-      ] as Array<{ type: "text"; text: string }>).filter((block) => block.text.trim().length > 0);
+      const blocks: Array<{ type: "text"; text: string }> = [];
+      blocks.push({ type: "text", text: CLAUDE_CODE_IDENTITY });
+      blocks.push({ type: "text", text: subagentSystemPrompt });
+
+      // Inject skill bodies into the subagent system prompt
+      const skillBodies = buildSkillBodies();
+      if (skillBodies) {
+        blocks.push({ type: "text", text: skillBodies });
+      }
+
+      systemPrompt = blocks.filter((block) => block.text.trim().length > 0);
     } else {
       // For main agent (Lin), build full system prompt with overrides
       systemPrompt = buildSystemPrompt({
