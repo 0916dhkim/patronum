@@ -167,6 +167,88 @@ function extractTextContent(contentJson: string): string {
   return "";
 }
 
+/**
+ * Update the telegram_message_id for the most recently saved message of a given role in a chat.
+ * Used to associate Telegram message IDs with bot messages after sending.
+ */
+export function updateLastMessageTelegramId(
+  chatId: string,
+  role: "user" | "assistant",
+  telegramMessageId: number
+): void {
+  const stmt = db.prepare(
+    `SELECT id FROM messages
+     WHERE chat_id = ? AND role = ?
+     ORDER BY id DESC
+     LIMIT 1`
+  );
+  const lastMsg = stmt.get(chatId, role) as { id: number } | undefined;
+
+  if (lastMsg) {
+    db.prepare(`UPDATE messages SET telegram_message_id = ? WHERE id = ?`).run(
+      telegramMessageId,
+      lastMsg.id
+    );
+  }
+}
+
+/**
+ * Look up a message by its Telegram message ID. Returns the role and truncated text content.
+ * Used to resolve reply annotations to actual message content.
+ * Returns null if message not found.
+ */
+export function getMessageByTelegramId(
+  chatId: string,
+  telegramMessageId: number
+): { role: "user" | "assistant"; text: string } | null {
+  const row = db
+    .prepare(
+      `SELECT role, content_json FROM messages
+       WHERE chat_id = ? AND telegram_message_id = ?
+       LIMIT 1`
+    )
+    .get(chatId, telegramMessageId) as
+    | { role: string; content_json: string }
+    | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  try {
+    const content = JSON.parse(row.content_json);
+    let text = "";
+
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      // Extract text from content blocks
+      const textParts: string[] = [];
+      for (const block of content) {
+        if (block.type === "text") {
+          textParts.push(block.text);
+        }
+      }
+      text = textParts.join("\n");
+    }
+
+    // Truncate to 200 chars and remove [Reply to message #...] annotations if present
+    text = text
+      .replace(/^\[Reply to message #\d+\]\s*/i, "")
+      .trim();
+    if (text.length > 200) {
+      text = text.substring(0, 200) + "…";
+    }
+
+    return {
+      role: row.role as "user" | "assistant",
+      text,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export interface AdjacentMessage {
   role: "user" | "assistant";
   text: string;
