@@ -15,7 +15,8 @@ export function initSession(): void {
       chat_id TEXT NOT NULL,
       role TEXT NOT NULL,
       content_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      telegram_message_id INTEGER
     )
   `);
   db.exec(`
@@ -35,6 +36,19 @@ export function initSession(): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_archived_chat_id ON archived_messages(chat_id, id)
   `);
+
+  // Idempotent migration: add telegram_message_id column if it doesn't exist
+  try {
+    const tableInfo = db.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
+    const hasColumn = tableInfo.some((col) => col.name === "telegram_message_id");
+    if (!hasColumn) {
+      db.exec(`ALTER TABLE messages ADD COLUMN telegram_message_id INTEGER`);
+      console.log("[migration] Added telegram_message_id column to messages table");
+    }
+  } catch (err) {
+    console.error("[migration] Failed to check/add telegram_message_id column:", err);
+    throw err;
+  }
 }
 
 export function loadHistory(chatId: string): Message[] {
@@ -69,15 +83,15 @@ export function loadHistory(chatId: string): Message[] {
   return messages.slice(startIndex);
 }
 
-export function saveMessage(chatId: string, message: Message): void {
+export function saveMessage(chatId: string, message: Message, telegramMessageId?: number): void {
   const contentJson =
     typeof message.content === "string"
       ? JSON.stringify(message.content)
       : JSON.stringify(message.content);
 
   db.prepare(
-    `INSERT INTO messages (chat_id, role, content_json) VALUES (?, ?, ?)`
-  ).run(chatId, message.role, contentJson);
+    `INSERT INTO messages (chat_id, role, content_json, telegram_message_id) VALUES (?, ?, ?, ?)`
+  ).run(chatId, message.role, contentJson, telegramMessageId ?? null);
 }
 
 /**

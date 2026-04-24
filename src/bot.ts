@@ -832,7 +832,7 @@ ${recallContent}
 
     // Save original text to DB (not augmented)
     const storageMessage: Message = { role: "user", content: event.text };
-    saveMessage(chatId, storageMessage);
+    saveMessage(chatId, storageMessage, event.ctx.message?.message_id);
   } else if (event.type === "user_voice") {
     // Voice message transcription — process like text message
     let recallContent: string | null = null;
@@ -859,7 +859,7 @@ ${recallContent}
 
     // Save to DB
     const storageMessage: Message = { role: "user", content: event.text };
-    saveMessage(chatId, storageMessage);
+    saveMessage(chatId, storageMessage, event.ctx.message?.message_id);
   } else if (event.type === "user_photo") {
     // Auto-recall: try to retrieve relevant memory context
     let recallContent: string | null = null;
@@ -905,7 +905,7 @@ ${recallContent}
 
     // Save only caption text to SQLite — don't persist image bytes or recall context
     const storageMessage: Message = { role: "user", content: event.caption };
-    saveMessage(chatId, storageMessage);
+    saveMessage(chatId, storageMessage, event.ctx.message?.message_id);
   } else {
     // For agent events, inject a synthetic user message so Lin can respond
     let systemText: string;
