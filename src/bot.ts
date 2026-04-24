@@ -373,7 +373,7 @@ export async function startBot(): Promise<void> {
       const replyToId = ctx.message.reply_to_message.message_id;
       const replyContent = getMessageByTelegramId(chatId, replyToId);
       if (replyContent) {
-        userText = `[Replying to ${replyContent.role}: "${replyContent.text}"] ${userText}`;
+        userText = `[Reply to message #${replyToId}] ${userText}`;
       } else {
         // Fallback to numeric ID if lookup fails
         userText = `[Reply to message #${replyToId}] ${userText}`;
@@ -426,7 +426,7 @@ export async function startBot(): Promise<void> {
       const replyToId = ctx.message.reply_to_message.message_id;
       const replyContent = getMessageByTelegramId(chatId, replyToId);
       if (replyContent) {
-        caption = `[Replying to ${replyContent.role}: "${replyContent.text}"] ${caption}`;
+        caption = `[Reply to message #${replyToId}] ${caption}`;
       } else {
         // Fallback to numeric ID if lookup fails
         caption = `[Reply to message #${replyToId}] ${caption}`;
@@ -552,7 +552,7 @@ export async function startBot(): Promise<void> {
         const replyToId = ctx.message.reply_to_message.message_id;
         const replyContent = getMessageByTelegramId(chatId, replyToId);
         if (replyContent) {
-          cleanedTranscription = `[Replying to ${replyContent.role}: "${replyContent.text}"] ${cleanedTranscription}`;
+          cleanedTranscription = `[Reply to message #${replyToId}] ${cleanedTranscription}`;
         } else {
           // Fallback to numeric ID if lookup fails
           cleanedTranscription = `[Reply to message #${replyToId}] ${cleanedTranscription}`;
