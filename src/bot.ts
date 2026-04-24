@@ -314,7 +314,7 @@ export async function startBot(): Promise<void> {
   // -------------------------------------------------------------------
   bot.on("text", async (ctx) => {
     const chatId = String(ctx.chat.id);
-    const userText = ctx.message.text;
+    let userText = ctx.message.text;
     const msgTime = ctx.message.date;
 
     if (msgTime < BOT_START_TIME - 5) {
@@ -347,6 +347,12 @@ export async function startBot(): Promise<void> {
       console.log(`[queue] Processing queued message in chat=${chatId}`);
     }
 
+    // Annotate reply-to context if this is a reply to a message (but not a queue reply)
+    if (ctx.message.reply_to_message && !isQueueReply) {
+      const replyToId = ctx.message.reply_to_message.message_id;
+      userText = `[Reply to message #${replyToId}] ${userText}`;
+    }
+
     // Enqueue and process
     state.queue.push({ type: "user_message", text: userText, ctx });
     processQueue(chatId, bot);
@@ -363,7 +369,7 @@ export async function startBot(): Promise<void> {
       return;
     }
 
-    const caption = ctx.message.caption || "[Image]";
+    let caption = ctx.message.caption || "[Image]";
     console.log(`[msg] chat=${chatId}: photo (caption: ${caption.slice(0, 100)})`);
 
     setCurrentChatId(chatId);
@@ -386,6 +392,12 @@ export async function startBot(): Promise<void> {
     if (isQueueReply) {
       state.queueReplyTo = undefined;
       console.log(`[queue] Processing queued photo in chat=${chatId}`);
+    }
+
+    // Annotate reply-to context if this is a reply to a message (but not a queue reply)
+    if (ctx.message.reply_to_message && !isQueueReply) {
+      const replyToId = ctx.message.reply_to_message.message_id;
+      caption = `[Reply to message #${replyToId}] ${caption}`;
     }
 
     // Take the largest photo size (last in array)
@@ -500,7 +512,13 @@ export async function startBot(): Promise<void> {
       // Clean up transcription errors with Haiku (Layer 2 cleanup pass)
       // Load recent history for disambiguation context
       const currentHistory = loadHistory(chatId);
-      const cleanedTranscription = await cleanupVoiceTranscript(rawTranscription, currentHistory);
+      let cleanedTranscription = await cleanupVoiceTranscript(rawTranscription, currentHistory);
+
+      // Annotate reply-to context if this is a reply to a message (but not a queue reply)
+      if (ctx.message.reply_to_message && !isQueueReply) {
+        const replyToId = ctx.message.reply_to_message.message_id;
+        cleanedTranscription = `[Reply to message #${replyToId}] ${cleanedTranscription}`;
+      }
 
       // Send transparency confirmation message with cleaned text
       const confirmationMsg = `🎤 *"${cleanedTranscription}"*`;
