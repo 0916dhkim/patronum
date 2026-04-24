@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateLastMessageTelegramId, getMessageByTelegramId } from "./session.js";
+import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateLastMessageTelegramId } from "./session.js";
 import { initAgentThread, appendToAgentThread } from "./agent-thread.js";
 import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { DraftStreamer } from "./draft-stream.js";
@@ -371,13 +371,7 @@ export async function startBot(): Promise<void> {
     // Annotate reply-to context if this is a reply to a message (but not a queue reply)
     if (ctx.message.reply_to_message && !isQueueReply) {
       const replyToId = ctx.message.reply_to_message.message_id;
-      const replyContent = getMessageByTelegramId(chatId, replyToId);
-      if (replyContent) {
-        userText = `[Reply to message #${replyToId}] ${userText}`;
-      } else {
-        // Fallback to numeric ID if lookup fails
-        userText = `[Reply to message #${replyToId}] ${userText}`;
-      }
+      userText = `[Reply to message #${replyToId}] ${userText}`;
     }
 
     // Enqueue and process
@@ -424,13 +418,7 @@ export async function startBot(): Promise<void> {
     // Annotate reply-to context if this is a reply to a message (but not a queue reply)
     if (ctx.message.reply_to_message && !isQueueReply) {
       const replyToId = ctx.message.reply_to_message.message_id;
-      const replyContent = getMessageByTelegramId(chatId, replyToId);
-      if (replyContent) {
-        caption = `[Reply to message #${replyToId}] ${caption}`;
-      } else {
-        // Fallback to numeric ID if lookup fails
-        caption = `[Reply to message #${replyToId}] ${caption}`;
-      }
+      caption = `[Reply to message #${replyToId}] ${caption}`;
     }
 
     // Take the largest photo size (last in array)
@@ -550,13 +538,7 @@ export async function startBot(): Promise<void> {
       // Annotate reply-to context if this is a reply to a message (but not a queue reply)
       if (ctx.message.reply_to_message && !isQueueReply) {
         const replyToId = ctx.message.reply_to_message.message_id;
-        const replyContent = getMessageByTelegramId(chatId, replyToId);
-        if (replyContent) {
-          cleanedTranscription = `[Reply to message #${replyToId}] ${cleanedTranscription}`;
-        } else {
-          // Fallback to numeric ID if lookup fails
-          cleanedTranscription = `[Reply to message #${replyToId}] ${cleanedTranscription}`;
-        }
+        cleanedTranscription = `[Reply to message #${replyToId}] ${cleanedTranscription}`;
       }
 
       // Send transparency confirmation message with cleaned text
