@@ -75,11 +75,12 @@ export class DraftStreamer {
    * Clean finalization: send accumulated text as a real message without interruption suffix.
    * Sets finalized flag synchronously before async work.
    * If no accumulated text, does nothing.
-   * No-op if already finalized.
+   * Returns the Telegram message ID if successfully sent, null otherwise.
+   * No-op if already finalized (returns null).
    */
-  async finalizeClean(): Promise<void> {
+  async finalizeClean(): Promise<number | null> {
     // Set flag synchronously BEFORE async work to prevent races
-    if (this.finalized) return;
+    if (this.finalized) return null;
     this.finalized = true;
 
     this.stop(); // Clear any pending flush timer
@@ -87,25 +88,28 @@ export class DraftStreamer {
     const accumulatedText = this.pendingText || this.lastSentText;
 
     // If no text accumulated, nothing to send
-    if (!accumulatedText) return;
+    if (!accumulatedText) return null;
 
     // Try HTML first (like sendMessageSafe pattern)
     let text = accumulatedText;
     try {
       text = markdownToTelegramHtml(accumulatedText);
       try {
-        await this.bot.telegram.sendMessage(this.chatId, text, { parse_mode: "HTML" });
-        return;
+        const result = await this.bot.telegram.sendMessage(this.chatId, text, { parse_mode: "HTML" });
+        return result.message_id;
       } catch {
         // HTML send failed, retry with plain text
-        await this.bot.telegram.sendMessage(this.chatId, accumulatedText);
+        const result = await this.bot.telegram.sendMessage(this.chatId, accumulatedText);
+        return result.message_id;
       }
     } catch (err) {
       // Markdown conversion failed, try plain text
       try {
-        await this.bot.telegram.sendMessage(this.chatId, accumulatedText);
+        const result = await this.bot.telegram.sendMessage(this.chatId, accumulatedText);
+        return result.message_id;
       } catch (e2) {
         console.warn("[draft] finalizeClean: Failed to send finalization message:", e2);
+        return null;
       }
     }
   }

@@ -580,10 +580,13 @@ export async function startBot(): Promise<void> {
     // This ensures it goes out before the new process can send "Back online"
     if (config.ownerChatId) {
       try {
-        await Promise.race([
+        const result = await Promise.race([
           bot.telegram.sendMessage(config.ownerChatId, "🔴 Patronum offline"),
           new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
         ]);
+        // Store the offline notification message in DB
+        const notificationMessage: Message = { role: "assistant", content: "🔴 Patronum offline" };
+        saveMessage(String(config.ownerChatId), notificationMessage, (result as any).message_id);
         console.log("[patronum] Offline notification sent successfully");
       } catch (err) {
         console.error("[patronum] Failed to send shutdown notification:", err);
@@ -717,7 +720,10 @@ export async function startBot(): Promise<void> {
     setTimeout(() => {
       if (isShuttingDown) return;
 
-      bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").then(() => {
+      bot.telegram.sendMessage(restartState.chatId, "🟢 Back online!").then((result) => {
+        // Store the back online notification message in DB
+        const notificationMessage: Message = { role: "assistant", content: "🟢 Back online!" };
+        saveMessage(restartState.chatId, notificationMessage, result.message_id);
         clearRestartState();
       }).catch((err) => {
         console.error("[patronum] Failed to send restart notification:", err);
@@ -747,7 +753,11 @@ export async function startBot(): Promise<void> {
     setTimeout(() => {
       if (isShuttingDown) return;
 
-      bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online").catch((err) => {
+      bot.telegram.sendMessage(config.ownerChatId, "🟢 Patronum online").then((result) => {
+        // Store the startup notification message in DB
+        const notificationMessage: Message = { role: "assistant", content: "🟢 Patronum online" };
+        saveMessage(String(config.ownerChatId), notificationMessage, result.message_id);
+      }).catch((err) => {
         console.error("[patronum] Failed to send startup notification:", err);
       });
     }, 3000); // 3s delay to let polling connection establish
@@ -962,7 +972,12 @@ ${recallContent}
           // If self_restart is among the tools, finalize the draft cleanly
           // so accumulated text is sent as a real message before restart
           if (toolName.includes("self_restart")) {
-            draftStreamer.finalizeClean().catch((err) => {
+            draftStreamer.finalizeClean().then((telegramMessageId) => {
+              if (telegramMessageId) {
+                // Record the Telegram message ID with the assistant message
+                updateLastMessageTelegramId(chatId, "assistant", telegramMessageId);
+              }
+            }).catch((err) => {
               console.warn("[stream] finalizeClean failed:", err);
             });
           }
