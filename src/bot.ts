@@ -6,7 +6,7 @@ import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult 
 import { DraftStreamer } from "./draft-stream.js";
 import { runAgentWithThread } from "./run-agent.js";
 import { getAgentDef } from "./agents.js";
-import { compactIfNeeded } from "./compaction.js";
+import { compactIfNeeded, getContextWindow } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
 import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
@@ -37,6 +37,8 @@ interface ChatState {
   activeController?: AbortController;
   /** Message ID of the ForceReply prompt for /queue command, used to detect replies */
   queueReplyTo?: number;
+  /** Last-known input token count from the most recent agent turn */
+  lastInputTokens?: number;
 }
 
 const chatStates = new Map<string, ChatState>();
@@ -272,13 +274,29 @@ export async function startBot(): Promise<void> {
     const chunkCount = getChunkCount();
     const activeTasks = taskManager.countRunning();
     const model = config.claudeModel;
+    const state = getChatState(chatId);
 
-    const statusMsg = `🟢 Patronum Status
+    let statusMsg = `🟢 Patronum Status
 
 ⏱ Uptime: ${uptimeStr}
 🧠 Memory: ${chunkCount.toLocaleString()} chunks
 ⚙️ Active tasks: ${activeTasks}
 🤖 Model: ${model}`;
+
+    // Add context fullness line if we have input token data
+    if (state.lastInputTokens !== undefined && state.lastInputTokens > 0) {
+      try {
+        const contextWindow = await getContextWindow(model);
+        const percentage = (state.lastInputTokens / contextWindow * 100).toFixed(1);
+        const contextLine = `📊 Context: ${state.lastInputTokens.toLocaleString()} / ${contextWindow.toLocaleString()} (${percentage}%)`;
+        statusMsg += "\n" + contextLine;
+      } catch (err) {
+        console.error("[status] Failed to fetch context window:", err);
+        // Skip context line on error
+      }
+    } else {
+      statusMsg += "\n📊 Context: no data yet";
+    }
 
     try {
       await bot.telegram.sendMessage(chatId, statusMsg);
@@ -963,6 +981,9 @@ ${recallContent}
     draftStreamer.stop();
 
     const { messages: newMessages, inputTokens, earlyTermination } = agentResult;
+
+    // Store the last-known input token count on the chat state for status visibility
+    state.lastInputTokens = inputTokens;
 
     // Save all new messages to session history (even on early termination)
     // Strip thinking blocks before persistence — they are ephemeral to the current tool loop
