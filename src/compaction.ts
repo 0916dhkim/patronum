@@ -89,8 +89,9 @@ export async function getContextWindow(model: string): Promise<number> {
 
     if (response.ok) {
       const data = (await response.json()) as { context_window?: number; max_input_tokens?: number };
-      const contextWindow = data.context_window ?? data.max_input_tokens;
+      let contextWindow = data.context_window ?? data.max_input_tokens;
       if (contextWindow) {
+        contextWindow = Math.min(contextWindow, 200_000);
         contextWindowCache.set(model, contextWindow);
         console.log(`[compaction] Cached context window for ${model}: ${contextWindow}`);
         return contextWindow;
