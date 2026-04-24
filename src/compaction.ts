@@ -5,8 +5,8 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const MODELS_API_URL = "https://api.anthropic.com/v1/models";
 const COMPACTION_MODEL = "claude-haiku-4-5-20251001";
 
-// Compaction triggers at 50% of the model's context window
-const COMPACTION_RATIO = 0.50;
+// Compaction triggers at 200k input tokens absolute threshold
+const COMPACTION_THRESHOLD_TOKENS = 200_000;
 
 // Keep last ~20 messages verbatim during compaction
 const KEEP_RECENT_COUNT = 20;
@@ -89,9 +89,8 @@ export async function getContextWindow(model: string): Promise<number> {
 
     if (response.ok) {
       const data = (await response.json()) as { context_window?: number; max_input_tokens?: number };
-      let contextWindow = data.context_window ?? data.max_input_tokens;
+      const contextWindow = data.context_window ?? data.max_input_tokens;
       if (contextWindow) {
-        contextWindow = Math.min(contextWindow, 200_000);
         contextWindowCache.set(model, contextWindow);
         console.log(`[compaction] Cached context window for ${model}: ${contextWindow}`);
         return contextWindow;
@@ -287,7 +286,7 @@ async function summarizeMessages(messages: Message[]): Promise<string> {
 }
 
 /**
- * Token-based compaction: triggers when input_tokens / context_window >= 50%.
+ * Token-based compaction: triggers when input_tokens >= 200k absolute threshold.
  * Keeps the last KEEP_RECENT_COUNT messages verbatim, summarizes the rest with Haiku.
  * Uses progressive chunked summarization to handle transcripts larger than Haiku's context window.
  * Returns the (possibly compacted) message array.
@@ -298,15 +297,14 @@ export async function compactIfNeeded(
   model: string
 ): Promise<{ messages: Message[]; compacted: boolean }> {
   const contextWindow = await getContextWindow(model);
-  const ratio = inputTokens / contextWindow;
 
-  console.log(`[compaction] Token usage: ${inputTokens}/${contextWindow} (${(ratio * 100).toFixed(1)}%)`);
+  console.log(`[compaction] Token usage: ${inputTokens}/${contextWindow} tokens`);
 
-  if (ratio < COMPACTION_RATIO) {
+  if (inputTokens < COMPACTION_THRESHOLD_TOKENS) {
     return { messages, compacted: false };
   }
 
-  console.log(`[compaction] Threshold reached (${(ratio * 100).toFixed(1)}% >= ${COMPACTION_RATIO * 100}%) — compacting...`);
+  console.log(`[compaction] Threshold reached (${inputTokens} >= ${COMPACTION_THRESHOLD_TOKENS} tokens) — compacting...`);
 
   // Split: summarize older messages, keep recent ones verbatim
   const initialSplitIndex = Math.max(0, messages.length - KEEP_RECENT_COUNT);
