@@ -13,6 +13,7 @@ import type { PromptOverrides } from "../eval.js";
 
 export interface TestResult {
   name: string;
+  comments?: string;
   status: "PASS" | "FAIL" | "PARTIAL" | "ERROR";
   duration_ms: number;
   toolAssertions: AssertionResult[];
@@ -129,6 +130,7 @@ ${test.input.mock_recall}
       if (!agentDef) {
         return {
           name: test.name,
+          comments: test.comments,
           status: "ERROR",
           duration_ms: Date.now() - startTime,
           toolAssertions: [],
@@ -145,6 +147,7 @@ ${test.input.mock_recall}
     if (overrides?.subagentMdPath && !test.agent) {
       return {
         name: test.name,
+        comments: test.comments,
         status: "ERROR",
         duration_ms: Date.now() - startTime,
         toolAssertions: [],
@@ -264,6 +267,7 @@ ${test.input.mock_recall}
 
     return {
       name: test.name,
+      comments: test.comments,
       status,
       duration_ms: Date.now() - startTime,
       toolAssertions,
@@ -276,6 +280,7 @@ ${test.input.mock_recall}
     const msg = err instanceof Error ? err.message : String(err);
     return {
       name: test.name,
+      comments: test.comments,
       status: "ERROR",
       duration_ms: Date.now() - startTime,
       toolAssertions: [],

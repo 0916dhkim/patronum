@@ -35,6 +35,7 @@ export interface EvalTestAssertions {
 export interface EvalTest {
   name: string;
   description?: string;
+  comments?: string;
   agent?: string;
   tags?: string[];
   input: EvalTestInput;
@@ -326,6 +327,7 @@ function validateTest(test: unknown, filename: string): EvalTest {
   return {
     name: obj.name,
     description: typeof obj.description === "string" ? obj.description : undefined,
+    comments: typeof obj.comments === "string" ? obj.comments : undefined,
     agent,
     tags,
     input: {

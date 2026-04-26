@@ -86,6 +86,10 @@ async function printTestResults(
 
     console.log(`${icon} ${test.name} (${test.duration_ms}ms)`);
 
+    if (test.comments) {
+      console.log(`   ℹ️  ${test.comments}`);
+    }
+
     if (test.error) {
       console.log(`   Error: ${test.error}`);
       continue;
