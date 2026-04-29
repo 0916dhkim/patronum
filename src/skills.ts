@@ -39,6 +39,15 @@ function buildSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
     skills[name] = { name, description, body: skillBody };
   }
 
+  // Validate that all override keys correspond to skills that were actually loaded
+  if (overrides) {
+    for (const overrideName of Object.keys(overrides)) {
+      if (!skills[overrideName]) {
+        throw new Error(`Skill override specified for non-existent skill: ${overrideName}`);
+      }
+    }
+  }
+
   return skills;
 }
 

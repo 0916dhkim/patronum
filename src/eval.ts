@@ -424,7 +424,12 @@ function parsePromptOverrides(args: string[]): PromptOverrides {
       i++;
     } else if (args[i] === "--skill-md" && i + 1 < args.length) {
       const spec = args[i + 1];
-      const [skillName, filePath] = spec.split("=");
+      const eqIndex = spec.indexOf("=");
+      if (eqIndex === -1) {
+        throw new Error(`Invalid --skill-md format: ${spec} (expected skillName=filePath)`);
+      }
+      const skillName = spec.substring(0, eqIndex);
+      const filePath = spec.substring(eqIndex + 1);
       if (!skillName || !filePath) {
         throw new Error(`Invalid --skill-md format: ${spec} (expected skillName=filePath)`);
       }
