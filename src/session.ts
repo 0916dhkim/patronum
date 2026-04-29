@@ -193,6 +193,38 @@ export function updateLastMessageTelegramId(
 }
 
 /**
+ * Update the telegram_message_id for N most recent assistant messages in a chat.
+ * Used when a Claude turn produces multiple assistant messages that get combined into one Telegram message.
+ * All assistant messages from the turn should be stamped with the same Telegram ID for proper context resolution.
+ *
+ * @param chatId - The chat ID
+ * @param count - Number of most recent assistant messages to update
+ * @param telegramMessageId - The Telegram message ID to stamp
+ */
+export function updateAssistantMessagesTelegramId(
+  chatId: string,
+  count: number,
+  telegramMessageId: number
+): void {
+  const stmt = db.prepare(
+    `SELECT id FROM messages
+     WHERE chat_id = ? AND role = 'assistant'
+     ORDER BY id DESC
+     LIMIT ?`
+  );
+  const rows = stmt.all(chatId, count) as Array<{ id: number }>;
+
+  if (rows.length > 0) {
+    const updateStmt = db.prepare(
+      `UPDATE messages SET telegram_message_id = ? WHERE id = ?`
+    );
+    for (const row of rows) {
+      updateStmt.run(telegramMessageId, row.id);
+    }
+  }
+}
+
+/**
  * Look up a message by its Telegram message ID. Returns the role and truncated text content.
  * Used to resolve reply annotations to actual message content.
  * Returns null if message not found.

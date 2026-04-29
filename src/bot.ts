@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateLastMessageTelegramId } from "./session.js";
+import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateLastMessageTelegramId, updateAssistantMessagesTelegramId } from "./session.js";
 import { initAgentThread, appendToAgentThread } from "./agent-thread.js";
 import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { DraftStreamer } from "./draft-stream.js";
@@ -1120,11 +1120,13 @@ ${recallContent}
         const chunk = chunks[i];
         const telegramMessageId = await sendMessageSafe(bot, chatId, chunk);
         
-        // Store the Telegram message ID with the assistant message
-        // Update the last assistant message with the most recent Telegram ID (last chunk)
-        // This allows us to look up the message later when Danny replies
-        if (telegramMessageId) {
-          updateLastMessageTelegramId(chatId, "assistant", telegramMessageId);
+        // Store the Telegram message ID with all assistant messages from this turn
+        // Count how many assistant messages were in newMessages
+        const assistantMessageCount = newMessages.filter(msg => msg.role === "assistant").length;
+        // Stamp all N most recent assistant messages with this Telegram ID
+        // This ensures the full context is stamped even if the turn had multiple assistant messages
+        if (telegramMessageId && assistantMessageCount > 0) {
+          updateAssistantMessagesTelegramId(chatId, assistantMessageCount, telegramMessageId);
         }
       }
     }
