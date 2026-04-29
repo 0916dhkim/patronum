@@ -19,6 +19,8 @@ export interface PromptOverrides {
   soulContent?: string;
   subagentMdPath?: string;
   subagentContent?: string;
+  skillMdPaths?: Record<string, string>; // skill name -> override file path
+  skillContent?: Record<string, string>; // skill name -> override content
 }
 
 async function printTestResults(
@@ -367,7 +369,9 @@ function isAnyOverrideActive(overrides: PromptOverrides): boolean {
     overrides.soulMdPath ||
     overrides.soulContent ||
     overrides.subagentMdPath ||
-    overrides.subagentContent
+    overrides.subagentContent ||
+    (overrides.skillMdPaths && Object.keys(overrides.skillMdPaths).length > 0) ||
+    (overrides.skillContent && Object.keys(overrides.skillContent).length > 0)
   );
 }
 
@@ -381,6 +385,11 @@ function printOverrideBanner(overrides: PromptOverrides): void {
   }
   if (overrides.subagentMdPath) {
     console.log(`   --subagent-md: ${overrides.subagentMdPath}`);
+  }
+  if (overrides.skillMdPaths) {
+    for (const [skillName, filePath] of Object.entries(overrides.skillMdPaths)) {
+      console.log(`   --skill-md ${skillName}=${filePath}`);
+    }
   }
   console.log("");
 }
@@ -412,6 +421,24 @@ function parsePromptOverrides(args: string[]): PromptOverrides {
       }
       overrides.subagentMdPath = filePath;
       overrides.subagentContent = readFileSync(filePath, "utf-8");
+      i++;
+    } else if (args[i] === "--skill-md" && i + 1 < args.length) {
+      const spec = args[i + 1];
+      const [skillName, filePath] = spec.split("=");
+      if (!skillName || !filePath) {
+        throw new Error(`Invalid --skill-md format: ${spec} (expected skillName=filePath)`);
+      }
+      if (!existsSync(filePath)) {
+        throw new Error(`File not found: --skill-md ${skillName}=${filePath}`);
+      }
+      if (!overrides.skillMdPaths) {
+        overrides.skillMdPaths = {};
+      }
+      if (!overrides.skillContent) {
+        overrides.skillContent = {};
+      }
+      overrides.skillMdPaths[skillName] = filePath;
+      overrides.skillContent[skillName] = readFileSync(filePath, "utf-8");
       i++;
     }
   }

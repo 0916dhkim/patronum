@@ -182,7 +182,7 @@ ${test.input.mock_recall}
       blocks.push({ type: "text", text: subagentSystemPrompt });
 
       // Inject skill bodies into the subagent system prompt
-      const skillBodies = buildSkillBodies();
+      const skillBodies = buildSkillBodies(overrides?.skillContent);
       if (skillBodies) {
         blocks.push({ type: "text", text: skillBodies });
       }
@@ -193,6 +193,7 @@ ${test.input.mock_recall}
       systemPrompt = buildSystemPrompt({
         soulContent: overrides?.soulContent,
         agentsContent: overrides?.agentsContent,
+        skillOverrides: overrides?.skillContent,
       });
     }
 

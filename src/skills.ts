@@ -9,7 +9,9 @@ export interface SkillDef {
   body: string;
 }
 
-function buildSkills(): Record<string, SkillDef> {
+export type SkillOverrides = Record<string, string>; // skill name -> override body content
+
+function buildSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
   const skillsDir = path.join(config.workspace, "skills");
   const skills: Record<string, SkillDef> = {};
 
@@ -32,22 +34,24 @@ function buildSkills(): Record<string, SkillDef> {
       continue;
     }
 
-    skills[name] = { name, description, body };
+    // Use override body if provided, otherwise use the disk body
+    const skillBody = overrides?.[name] !== undefined ? overrides[name] : body;
+    skills[name] = { name, description, body: skillBody };
   }
 
   return skills;
 }
 
-function getSkills(): Record<string, SkillDef> {
-  return buildSkills();
+function getSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
+  return buildSkills(overrides);
 }
 
-export function loadSkills(): Record<string, SkillDef> {
-  return getSkills();
+export function loadSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
+  return getSkills(overrides);
 }
 
-export function buildSkillsSummary(): string {
-  const skills = getSkills();
+export function buildSkillsSummary(overrides?: SkillOverrides): string {
+  const skills = getSkills(overrides);
   const entries = Object.values(skills);
   if (entries.length === 0) return "";
 
@@ -55,12 +59,12 @@ export function buildSkillsSummary(): string {
   return `[Available Skills]\n\n${lines.join("\n")}`;
 }
 
-export function getSkillBody(name: string): string | undefined {
-  return getSkills()[name]?.body;
+export function getSkillBody(name: string, overrides?: SkillOverrides): string | undefined {
+  return getSkills(overrides)[name]?.body;
 }
 
-export function buildSkillBodies(): string {
-  const skills = getSkills();
+export function buildSkillBodies(overrides?: SkillOverrides): string {
+  const skills = getSkills(overrides);
   const entries = Object.values(skills);
   if (entries.length === 0) return "";
 

@@ -23,6 +23,10 @@ export const runEvalTool: ToolHandler = {
           type: "string",
           description: "Optional path to override the agents file (for ablation runs)",
         },
+        skill_md: {
+          type: "string",
+          description: "Optional skill overrides in format 'skillName=path' (e.g. 'patronum-behavior-test=/tmp/override.md')",
+        },
       },
       required: ["test"],
     },
@@ -32,6 +36,7 @@ export const runEvalTool: ToolHandler = {
     const testName = input.test as string;
     const subagentMd = input.subagent_md as string | undefined;
     const agentsMd = input.agents_md as string | undefined;
+    const skillMd = input.skill_md as string | undefined;
 
     const args = ["run", testName];
     if (subagentMd) {
@@ -39,6 +44,9 @@ export const runEvalTool: ToolHandler = {
     }
     if (agentsMd) {
       args.push("--agents-md", agentsMd);
+    }
+    if (skillMd) {
+      args.push("--skill-md", skillMd);
     }
 
     return new Promise((resolve) => {

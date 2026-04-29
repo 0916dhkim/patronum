@@ -3,7 +3,7 @@ import { loadContextFile } from "./context.js";
 import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import { buildSubagentsSummary } from "./agents.js";
-import { buildSkillsSummary, buildSkillBodies } from "./skills.js";
+import { buildSkillsSummary, buildSkillBodies, type SkillOverrides } from "./skills.js";
 import {
   prepareMessagesForClaude,
   prepareSystemPromptForClaude,
@@ -50,6 +50,8 @@ export interface AgentOptions {
   soulContent?: string;
   /** Override AGENTS.md content (eval-only) */
   agentsContent?: string;
+  /** Override skill bodies by name (eval-only) */
+  skillOverrides?: SkillOverrides;
   /** Enable extended thinking mode */
   thinking?: boolean;
 }
@@ -73,11 +75,11 @@ export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text";
   if (subagentsSummary) system.push({ type: "text", text: subagentsSummary });
 
   // Inject available skills summary
-  const skillsSummary = buildSkillsSummary();
+  const skillsSummary = buildSkillsSummary(options?.skillOverrides);
   if (skillsSummary) system.push({ type: "text", text: skillsSummary });
 
   // Inject full skill instruction bodies
-  const skillBodies = buildSkillBodies();
+  const skillBodies = buildSkillBodies(options?.skillOverrides);
   if (skillBodies) system.push({ type: "text", text: skillBodies });
 
   // Append any extra context (reserved for future use — currently unused)
