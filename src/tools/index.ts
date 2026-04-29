@@ -13,10 +13,12 @@ import { searchTool } from "./search.js";
 import { vaultwardenTool } from "./vaultwarden.js";
 import { readAgentThreadTool, listAgentThreadsTool } from "./agent-thread-tools.js";
 import { runEvalTool } from "./run-eval.js";
+import { loadSkillTool, setSkillOverrides } from "./load-skill.js";
 
 export { setCurrentChatId, getCurrentChatId } from "./chat-context.js";
 export { setBot, setSendMediaChatId };
 export { setSpawnCallback };
+export { setSkillOverrides };
 
 const tools: ToolHandler[] = [
   execTool,
@@ -35,6 +37,7 @@ const tools: ToolHandler[] = [
   readAgentThreadTool,
   listAgentThreadsTool,
   runEvalTool,
+  loadSkillTool,
 ];
 
 const toolMap = new Map<string, ToolHandler>(

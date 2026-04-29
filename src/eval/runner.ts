@@ -1,7 +1,7 @@
 import { extractTextFromResponse, CLAUDE_CODE_IDENTITY, buildSystemPrompt } from "../agent.js";
-import { setCurrentChatId, getToolDefinitions } from "../tools/index.js";
+import { setCurrentChatId, getToolDefinitions, setSkillOverrides } from "../tools/index.js";
 import { getAgentDef } from "../agents.js";
-import { buildSkillBodies } from "../skills.js";
+import { buildSkillsSummary, buildSkillBodies } from "../skills.js";
 import { EvalTest } from "./loader.js";
 import type { ToolCallEntry } from "./interceptor.js";
 import { evaluateDeterministicAssertions, AssertionResult } from "./assertions.js";
@@ -162,6 +162,13 @@ ${test.input.mock_recall}
     // Set a fake chat ID for tools that need it
     setCurrentChatId("eval-test-" + test.name);
 
+    // Set skill overrides if present (for multi-call mode or future use)
+    setSkillOverrides(
+      overrides?.skillContent && typeof overrides.skillContent === "object"
+        ? (overrides.skillContent as Record<string, string>)
+        : undefined
+    );
+
     // Single-call mode: Make ONE Claude API call, extract tool calls, don't execute them.
     // No tool loop, no tool result messages sent back to Claude.
     
@@ -181,8 +188,14 @@ ${test.input.mock_recall}
       blocks.push({ type: "text", text: CLAUDE_CODE_IDENTITY });
       blocks.push({ type: "text", text: subagentSystemPrompt });
 
-      // Inject skill bodies into the subagent system prompt
-      const skillBodies = buildSkillBodies(overrides?.skillContent);
+      // For eval (single-call mode), keep skill bodies in subagent prompts.
+      // Tools don't execute in eval, so progressive disclosure via load_skill won't work.
+      // This preserves backward compatibility with existing subagent tests.
+      const skillBodies = buildSkillBodies(
+        overrides?.skillContent && typeof overrides.skillContent === "object"
+          ? (overrides.skillContent as Record<string, string>)
+          : undefined
+      );
       if (skillBodies) {
         blocks.push({ type: "text", text: skillBodies });
       }

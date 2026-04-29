@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { getAgentDef, type AgentDef } from "./agents.js";
-import { getToolDefinitions, executeTool, setCurrentChatId } from "./tools/index.js";
-import { buildSkillBodies } from "./skills.js";
+import { getToolDefinitions, executeTool, setCurrentChatId, setSkillOverrides } from "./tools/index.js";
+import { buildSkillsSummary } from "./skills.js";
 import {
   logUsage,
   prepareMessagesForClaude,
@@ -32,10 +32,10 @@ function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
     system.push({ type: "text", text: agent.systemPrompt });
   }
 
-  // Inject skill bodies into the subagent system prompt
-  const skillBodies = buildSkillBodies();
-  if (skillBodies) {
-    system.push({ type: "text", text: skillBodies });
+  // Inject skill summary (skill bodies load on-demand via load_skill tool)
+  const skillsSummary = buildSkillsSummary();
+  if (skillsSummary) {
+    system.push({ type: "text", text: skillsSummary });
   }
 
   return system;
@@ -213,6 +213,9 @@ export async function runAgentWithThread(
 
   // Set chat context so tools know which chat this agent belongs to
   setCurrentChatId(chatId);
+
+  // Set skill overrides (undefined in production — no overrides)
+  setSkillOverrides(undefined);
 
   // Build system prompt (no thread context — it arrives via tool)
   const systemPrompt = buildAgentSystemPrompt(agent);

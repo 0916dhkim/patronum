@@ -7,6 +7,7 @@ export interface SkillDef {
   name: string;
   description: string;
   body: string;
+  path: string; // Full path to the SKILL.md file
 }
 
 export type SkillOverrides = Record<string, string>; // skill name -> override body content
@@ -36,7 +37,7 @@ function buildSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
 
     // Use override body if provided, otherwise use the disk body
     const skillBody = overrides?.[name] !== undefined ? overrides[name] : body;
-    skills[name] = { name, description, body: skillBody };
+    skills[name] = { name, description, body: skillBody, path: skillPath };
   }
 
   // Validate that all override keys correspond to skills that were actually loaded
@@ -64,7 +65,10 @@ export function buildSkillsSummary(overrides?: SkillOverrides): string {
   const entries = Object.values(skills);
   if (entries.length === 0) return "";
 
-  const lines = entries.map((s) => `- **${s.name}**: ${s.description}`);
+  const lines = entries.map(
+    (s) =>
+      `- **${s.name}**: ${s.description}`
+  );
   return `[Available Skills]\n\n${lines.join("\n")}`;
 }
 
