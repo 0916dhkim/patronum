@@ -227,54 +227,71 @@ export function updateAssistantMessagesTelegramId(
 /**
  * Look up a message by its Telegram message ID. Returns the role and truncated text content.
  * Used to resolve reply annotations to actual message content.
+ * When multiple rows share the same telegram_message_id (e.g., tool_use + text response),
+ * returns all rows concatenated in order.
  * Returns null if message not found.
  */
 export function getMessageByTelegramId(
   chatId: string,
   telegramMessageId: number
 ): { role: "user" | "assistant"; text: string } | null {
-  const row = db
+  const rows = db
     .prepare(
       `SELECT role, content_json FROM messages
        WHERE chat_id = ? AND telegram_message_id = ?
-       LIMIT 1`
+       ORDER BY id ASC`
     )
-    .get(chatId, telegramMessageId) as
-    | { role: string; content_json: string }
-    | undefined;
+    .all(chatId, telegramMessageId) as Array<{
+      role: string;
+      content_json: string;
+    }>;
 
-  if (!row) {
+  if (rows.length === 0) {
     return null;
   }
 
   try {
-    const content = JSON.parse(row.content_json);
-    let text = "";
+    // Concatenate text from all rows
+    const textParts: string[] = [];
+    let role = rows[0].role; // Use role from first row (should be same for all)
 
-    if (typeof content === "string") {
-      text = content;
-    } else if (Array.isArray(content)) {
-      // Extract text from content blocks
-      const textParts: string[] = [];
-      for (const block of content) {
-        if (block.type === "text") {
-          textParts.push(block.text);
+    for (const row of rows) {
+      const content = JSON.parse(row.content_json);
+      let text = "";
+
+      if (typeof content === "string") {
+        text = content;
+      } else if (Array.isArray(content)) {
+        // Extract text from content blocks
+        const blockTexts: string[] = [];
+        for (const block of content) {
+          if (block.type === "text") {
+            blockTexts.push(block.text);
+          }
         }
+        text = blockTexts.join("\n");
       }
-      text = textParts.join("\n");
+
+      if (text.trim()) {
+        textParts.push(text);
+      }
     }
 
-    // Truncate to 200 chars and remove [Reply to message #...] annotations if present
-    text = text
+    let finalText = textParts.join("\n");
+
+    // Remove [Reply to message #...] annotations if present
+    finalText = finalText
       .replace(/^\[Reply to message #\d+\]\s*/i, "")
       .trim();
-    if (text.length > 200) {
-      text = text.substring(0, 200) + "…";
+
+    // Truncate to 200 chars
+    if (finalText.length > 200) {
+      finalText = finalText.substring(0, 200) + "…";
     }
 
     return {
-      role: row.role as "user" | "assistant",
-      text,
+      role: role as "user" | "assistant",
+      text: finalText,
     };
   } catch {
     return null;
