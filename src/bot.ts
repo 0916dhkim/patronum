@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateLastMessageTelegramId, updateAssistantMessagesTelegramId, getMessageByTelegramId } from "./session.js";
+import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateLastMessageTelegramId, updateAssistantMessagesTelegramId } from "./session.js";
 import { initAgentThread, appendToAgentThread } from "./agent-thread.js";
 import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { DraftStreamer } from "./draft-stream.js";
@@ -57,36 +57,6 @@ function getChatState(chatId: string): ChatState {
     chatStates.set(chatId, state);
   }
   return state;
-}
-
-// ---------------------------------------------------------------------------
-// Helper: Enrich reply annotations with message content lookup
-// ---------------------------------------------------------------------------
-
-async function enrichReplyAnnotation(
-  chatId: string,
-  replyToId: number,
-  text: string
-): Promise<string> {
-  // If the text doesn't start with a reply annotation, return as-is
-  if (!text.startsWith(`[Reply to message #${replyToId}]`)) {
-    return text;
-  }
-
-  // Try to look up the original message
-  const lookedUp = getMessageByTelegramId(chatId, replyToId);
-  if (!lookedUp) {
-    // Message not found — graceful degradation, return original annotation
-    return text;
-  }
-
-  // Enrich the annotation with content and role
-  const roleLabel = lookedUp.role === "assistant" ? "my message" : "your message";
-  const enrichedAnnotation = `[Reply to ${roleLabel} #${replyToId}: "${lookedUp.text}"]`;
-  
-  // Replace the bare annotation with the enriched one
-  const remainder = text.substring(`[Reply to message #${replyToId}]`.length);
-  return enrichedAnnotation + remainder;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,8 +372,6 @@ export async function startBot(): Promise<void> {
     if (ctx.message.reply_to_message && !isQueueReply) {
       const replyToId = ctx.message.reply_to_message.message_id;
       userText = `[Reply to message #${replyToId}] ${userText}`;
-      // Enrich the annotation with actual message content
-      userText = await enrichReplyAnnotation(chatId, replyToId, userText);
     }
 
     // Enqueue and process
@@ -451,8 +419,6 @@ export async function startBot(): Promise<void> {
     if (ctx.message.reply_to_message && !isQueueReply) {
       const replyToId = ctx.message.reply_to_message.message_id;
       caption = `[Reply to message #${replyToId}] ${caption}`;
-      // Enrich the annotation with actual message content
-      caption = await enrichReplyAnnotation(chatId, replyToId, caption);
     }
 
     // Take the largest photo size (last in array)
@@ -573,8 +539,6 @@ export async function startBot(): Promise<void> {
       if (ctx.message.reply_to_message && !isQueueReply) {
         const replyToId = ctx.message.reply_to_message.message_id;
         cleanedTranscription = `[Reply to message #${replyToId}] ${cleanedTranscription}`;
-        // Enrich the annotation with actual message content
-        cleanedTranscription = await enrichReplyAnnotation(chatId, replyToId, cleanedTranscription);
       }
 
       // Send transparency confirmation message with cleaned text
