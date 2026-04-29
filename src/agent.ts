@@ -3,7 +3,7 @@ import { loadContextFile } from "./context.js";
 import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import { buildSubagentsSummary } from "./agents.js";
-import { buildSkillsSummary, buildSkillBodies, type SkillOverrides } from "./skills.js";
+import { buildSkillsSummary, type SkillOverrides } from "./skills.js";
 import {
   prepareMessagesForClaude,
   prepareSystemPromptForClaude,
@@ -74,13 +74,9 @@ export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text";
   const subagentsSummary = buildSubagentsSummary();
   if (subagentsSummary) system.push({ type: "text", text: subagentsSummary });
 
-  // Inject available skills summary
+  // Inject available skills summary (skill bodies load on-demand via file read)
   const skillsSummary = buildSkillsSummary(options?.skillOverrides);
   if (skillsSummary) system.push({ type: "text", text: skillsSummary });
-
-  // Inject full skill instruction bodies
-  const skillBodies = buildSkillBodies(options?.skillOverrides);
-  if (skillBodies) system.push({ type: "text", text: skillBodies });
 
   // Append any extra context (reserved for future use — currently unused)
   if (options?.extraContext) {
