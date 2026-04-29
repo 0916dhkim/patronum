@@ -69,7 +69,11 @@ export function buildSkillsSummary(overrides?: SkillOverrides): string {
     (s) =>
       `- **${s.name}**: ${s.description}`
   );
-  return `[Available Skills]\n\n${lines.join("\n")}`;
+  return `[Available Skills]
+
+To load the full instructions for a skill, use load_skill(name).
+
+${lines.join("\n")}`;
 }
 
 export function getSkillBody(name: string, overrides?: SkillOverrides): string | undefined {

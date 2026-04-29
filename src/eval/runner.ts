@@ -1,7 +1,7 @@
 import { extractTextFromResponse, CLAUDE_CODE_IDENTITY, buildSystemPrompt } from "../agent.js";
 import { setCurrentChatId, getToolDefinitions, setSkillOverrides } from "../tools/index.js";
 import { getAgentDef } from "../agents.js";
-import { buildSkillsSummary, buildSkillBodies } from "../skills.js";
+import { buildSkillBodies } from "../skills.js";
 import { EvalTest } from "./loader.js";
 import type { ToolCallEntry } from "./interceptor.js";
 import { evaluateDeterministicAssertions, AssertionResult } from "./assertions.js";
