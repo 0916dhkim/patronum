@@ -526,6 +526,11 @@ function parseOpenAISSEChunk(data: string): {
     };
     finish_reason?: string;
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  } | null;
 } | null {
   if (data === "[DONE]") return null;
   try {
@@ -569,6 +574,10 @@ async function* stream(
       model,
       max_tokens: maxTokens,
       stream: true,
+      // Request usage info in the final SSE chunk so we can report real
+      // input_tokens for compaction threshold decisions. Without this,
+      // OpenRouter streaming provides no token telemetry.
+      stream_options: { include_usage: true },
       messages: translatedMsgs,
     };
     if (sys) reqBody.system = sys;
@@ -651,6 +660,11 @@ async function* stream(
   // reasoning.encrypted blocks) so they can be passed back on subsequent turns
   let accumulatedReasoningDetails: unknown[] = [];
   
+  // Capture usage from the final SSE chunk (OpenRouter sends usage when
+  // stream_options.include_usage is enabled). This is the real token count
+  // needed for compaction threshold decisions.
+  let capturedUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null = null;
+  
   let messageStartEmitted = false;
 
   try {
@@ -672,7 +686,16 @@ async function* stream(
         const data = line.slice(6);
         const chunk = parseOpenAISSEChunk(data);
 
-        if (!chunk || !chunk.choices || chunk.choices.length === 0) continue;
+        if (!chunk) continue;
+
+        // Capture usage from the final chunk (OpenRouter sends usage with
+        // stream_options: { include_usage: true }). This chunk may have empty
+        // choices, so we must capture it before the choices check below.
+        if (chunk.usage) {
+          capturedUsage = chunk.usage;
+        }
+
+        if (!chunk.choices || chunk.choices.length === 0) continue;
 
         // Extract delta from choices[0]
         const delta = chunk.choices[0].delta;
@@ -800,14 +823,23 @@ async function* stream(
       yield blockStop;
     }
 
-    // Emit message_delta with stop_reason
+    // Emit message_delta with stop_reason and real usage (if captured)
     const hasToolCalls = accumulatedToolCalls.length > 0;
     const messageDelta: StreamEvent = {
       type: "message_delta" as const,
       delta: {
         stop_reason: hasToolCalls ? ("tool_use" as const) : ("end_turn" as const),
       },
-      usage: { output_tokens: 0 },
+      usage: {
+        output_tokens: capturedUsage?.completion_tokens ?? 0,
+        // Include real input_tokens from OpenRouter's usage report.
+        // This allows the agent loop to track actual context consumption
+        // for compaction threshold decisions. For Anthropic, input_tokens
+        // arrive in message_start instead.
+        ...(capturedUsage?.prompt_tokens
+          ? { input_tokens: capturedUsage.prompt_tokens }
+          : {}),
+      },
       // Pass accumulated reasoning_details so the agent loop can store them
       // on the assistant message for subsequent turns
       ...(accumulatedReasoningDetails.length > 0

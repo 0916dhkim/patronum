@@ -957,6 +957,11 @@ ${recallContent}
     saveMessage(chatId, syntheticMessage);
   }
 
+  // Resolve the active model exactly once per main turn.
+  // The same resolved model is passed to both runAgentStreaming and compactIfNeeded,
+  // ensuring compaction uses the same model that produced the conversation.
+  const model = config.claudeModel;
+
   // Run Lin with streaming responses
   const draftStreamer = new DraftStreamer(bot, chatId);
 
@@ -987,7 +992,7 @@ ${recallContent}
         },
       },
       {
-        model: config.claudeModel,
+        model,
         workspace: config.workspace,
         thinking: true,
         // extraContext is no longer used — thread context arrives via tool, not system prompt
@@ -1017,7 +1022,6 @@ ${recallContent}
 
     // Token-based compaction (skip on early termination — process is about to die)
     if (!earlyTermination) {
-      const model = config.claudeModel;
       // Strip thinking blocks from newMessages before compaction/archival — same invariant as saveMessage above
       const newMessagesStripped = newMessages.map((msg) => ({
         ...msg,
@@ -1026,6 +1030,7 @@ ${recallContent}
           : msg.content,
       }));
       const fullHistory = [...history, ...newMessagesStripped];
+      // Pass the same resolved model used for runAgentStreaming above
       const { messages: compactedHistory, compacted } = await compactIfNeeded(
         fullHistory,
         inputTokens,
@@ -1036,7 +1041,7 @@ ${recallContent}
         // The compacted set starts with a summary + ack, so the original messages being
         // summarized are everything before the kept tail in fullHistory.
         // Archive the entire pre-compaction history so nothing is lost.
-        archiveMessages(chatId, fullHistory, "70% context window");
+        archiveMessages(chatId, fullHistory, "70% context window threshold");
         replaceHistory(chatId, compactedHistory);
         history.splice(0, history.length, ...compactedHistory);
       }

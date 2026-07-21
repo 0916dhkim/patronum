@@ -140,7 +140,17 @@ export interface StreamContentBlockStop {
 export interface StreamMessageDelta {
   type: "message_delta";
   delta: { stop_reason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" };
-  usage: { output_tokens: number };
+  usage: {
+    output_tokens: number;
+    /**
+     * Input token count. For Anthropic, this arrives in message_start.
+     * For OpenRouter, the real value arrives here at end of stream
+     * (when stream_options.include_usage is enabled).
+     */
+    input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
   /**
    * OpenRouter-specific reasoning details accumulated during streaming.
    * Present when the model (e.g. Gemini) emits reasoning_details that must be

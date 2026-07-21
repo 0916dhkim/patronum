@@ -282,6 +282,22 @@ export async function runAgentStreaming(
           if (event.reasoning_details && event.reasoning_details.length > 0) {
             reasoningDetails = event.reasoning_details;
           }
+          // Capture real input tokens from message_delta usage.
+          // For Anthropic: input_tokens arrive in message_start (already captured).
+          // For OpenRouter: real input_tokens arrive here at end of stream
+          // (when stream_options.include_usage is enabled).
+          const deltaInputTokens = event.usage?.input_tokens;
+          if (deltaInputTokens !== undefined && deltaInputTokens > 0) {
+            const cacheCreation = event.usage?.cache_creation_input_tokens ?? 0;
+            const cacheRead = event.usage?.cache_read_input_tokens ?? 0;
+            lastInputTokens = deltaInputTokens + cacheCreation + cacheRead;
+            logUsage("lin", {
+              input_tokens: deltaInputTokens,
+              output_tokens: event.usage.output_tokens,
+              cache_creation_input_tokens: cacheCreation,
+              cache_read_input_tokens: cacheRead,
+            });
+          }
         }
       }
 
