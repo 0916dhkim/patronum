@@ -15,6 +15,13 @@ export interface Config {
   vaultwardenEmail: string;
   vaultwardenMasterPassword: string;
   searxngToken: string;
+  // Cognee memory backend feature flags (Phase 2 migration)
+  memoryBackend: string;        // "sqlite" (default/legacy) or "cognee"
+  cogneeUrl: string;            // "http://127.0.0.1:8001"
+  cogneeDataset: string;        // "patronum_memory"
+  cogneeApiKey: string;         // from Vaultwarden or patronum.toml
+  shadowRead: boolean;          // Phase 2b: log Cognee+SQLite comparison
+  dualWrite: boolean;           // Phase 2c: write to both backends
 }
 
 // Mutable config — populated by initConfig() before use
@@ -31,6 +38,12 @@ export const config: Config = {
   vaultwardenEmail: "",
   vaultwardenMasterPassword: "",
   searxngToken: "",
+  memoryBackend: "sqlite",
+  cogneeUrl: "http://127.0.0.1:8001",
+  cogneeDataset: "patronum_memory",
+  cogneeApiKey: "",
+  shadowRead: false,
+  dualWrite: false,
 };
 
 export async function initConfig(): Promise<void> {
@@ -58,6 +71,16 @@ export async function initConfig(): Promise<void> {
   // Allow empty token for searxng — it's optional and Danny can fill it in later
   const tokenValue = searxng.token;
   config.searxngToken = typeof tokenValue === "string" ? tokenValue : "";
+
+  // Cognee memory backend feature flags
+  const memory = getOptionalTable(data, "memory", tomlPath) ?? {};
+  config.memoryBackend = (typeof memory.backend === "string" && (memory.backend === "cognee" || memory.backend === "sqlite"))
+    ? memory.backend : "sqlite";
+  config.cogneeUrl = typeof memory.cognee_url === "string" ? memory.cognee_url : "http://127.0.0.1:8001";
+  config.cogneeDataset = typeof memory.cognee_dataset === "string" ? memory.cognee_dataset : "patronum_memory";
+  config.cogneeApiKey = typeof memory.cognee_api_key === "string" ? memory.cognee_api_key : "";
+  config.shadowRead = memory.shadow_read === true;
+  config.dualWrite = memory.dual_write === true;
 }
 
 function findWorkspace(): string {

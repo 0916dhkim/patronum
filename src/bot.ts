@@ -11,7 +11,8 @@ import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
 import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
 import { taskManager } from "./task-manager.js";
-import { initEmbeddings, initMemoryStore, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
+import { initEmbeddings, initMemoryStore, initMigrationLedger, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
+import { vaultwardenTool } from "./tools/vaultwarden.js";
 import { stripThinkingBlocks } from "./prompt-cache.js";
 import { transcribeAudio } from "./whisper.js";
 import { cleanupVoiceTranscript } from "./voice-cleanup.js";
@@ -147,6 +148,37 @@ export async function startBot(): Promise<void> {
     console.log(`[patronum] Memory system initialized (${getChunkCount()} chunks indexed)`);
   } else {
     console.warn("[patronum] VOYAGE_API_KEY not set — memory system disabled");
+  }
+
+  // Initialize migration ledger for Cognee backfill tracking
+  try {
+    initMigrationLedger();
+    console.log("[patronum] Migration ledger initialized");
+  } catch (err) {
+    console.warn("[patronum] Migration ledger init failed (non-fatal):", err);
+  }
+
+  // Fetch Cognee API key from Vaultwarden at startup — runtime only, no disk persistence
+  if (config.vaultwardenUrl) {
+    try {
+      const result = await vaultwardenTool.execute({ action: "get", query: "Cognee API Key Production" });
+      // Parse the result to extract the password field
+      for (const line of result.split("\n")) {
+        const colonIdx = line.indexOf(": ");
+        if (colonIdx === -1) continue;
+        const key = line.substring(0, colonIdx).trim().toLowerCase();
+        if (key === "password") {
+          const apiKey = line.substring(colonIdx + 2).trim();
+          if (apiKey) {
+            (config as any).cogneeApiKey = apiKey;
+            console.log("[patronum] Cognee API key injected from Vaultwarden (runtime)");
+          }
+          break;
+        }
+      }
+    } catch (err) {
+      console.warn("[patronum] Failed to fetch Cognee API key from Vaultwarden:", err);
+    }
   }
 
   const bot = new Telegraf(config.telegramBotToken, {
