@@ -156,18 +156,28 @@ function translateMessages(
       }
 
       // Build OpenAI message
-      const openaiMsg: { role: string; content?: unknown; tool_calls?: unknown } = {
+      const openaiMsg: { role: string; content?: unknown; tool_calls?: unknown; reasoning_details?: unknown[] } = {
         role: "assistant",
       };
 
       if (regularContent.length > 0) {
         openaiMsg.content = regularContent.length === 1 ? regularContent[0].text : regularContent;
       } else {
-        openaiMsg.content = "";
+        // Use null (not "") for empty content — Gemini expects null when the
+        // assistant message only contains tool_calls. An empty string can cause
+        // Gemini to lose context and return empty responses on later turns.
+        openaiMsg.content = null;
       }
 
       if (toolCalls.length > 0) {
         openaiMsg.tool_calls = toolCalls;
+      }
+
+      // Pass reasoning_details back to the API if present (e.g. Gemini's
+      // reasoning.encrypted blocks). Without these, Gemini loses its reasoning
+      // context after tool calls and may return empty responses.
+      if (msg.reasoning_details && Array.isArray(msg.reasoning_details) && msg.reasoning_details.length > 0) {
+        openaiMsg.reasoning_details = msg.reasoning_details;
       }
 
       translated.push(openaiMsg as { role: string; content: unknown });
@@ -261,6 +271,7 @@ function translateResponse(openaiResponse: {
       role: string;
       content: string | null;
       tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+      reasoning_details?: unknown[];
     };
   }>;
   usage?: {
@@ -313,7 +324,7 @@ function translateResponse(openaiResponse: {
   const inputTokens = usage?.prompt_tokens ?? 0;
   const outputTokens = usage?.completion_tokens ?? 0;
 
-  return {
+  const response: ClaudeResponse = {
     id: "msg-openrouter",
     type: "message",
     role: "assistant",
@@ -325,6 +336,15 @@ function translateResponse(openaiResponse: {
       output_tokens: outputTokens,
     },
   };
+
+  // Preserve reasoning_details (e.g. Gemini's reasoning.encrypted blocks) so they
+  // can be passed back on subsequent turns. Without these, Gemini loses its
+  // reasoning context after tool calls and may return empty responses.
+  if (message.reasoning_details && Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0) {
+    response.reasoning_details = message.reasoning_details;
+  }
+
+  return response;
 }
 
 /**
@@ -406,6 +426,7 @@ async function call(
           role: string;
           content: string | null;
           tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+          reasoning_details?: unknown[];
         };
       }>;
       usage?: {
@@ -435,6 +456,7 @@ function parseOpenAISSEChunk(data: string): {
       role?: string;
       content?: string;
       tool_calls?: Array<{ id?: string; index?: number; function?: { name?: string; arguments?: string } }>;
+      reasoning_details?: unknown[];
     };
     finish_reason?: string;
   }>;
@@ -543,6 +565,10 @@ async function* stream(
   let toolCallsByIndex: Record<number, { id: string; name: string; accumulatedArgs: string }> = {};
   let accumulatedToolCalls: Array<{ id: string; name: string }> = [];
   
+  // Accumulate reasoning_details from streaming chunks (e.g. Gemini's
+  // reasoning.encrypted blocks) so they can be passed back on subsequent turns
+  let accumulatedReasoningDetails: unknown[] = [];
+  
   let messageStartEmitted = false;
 
   try {
@@ -611,6 +637,11 @@ async function* stream(
             delta: { type: "text_delta", text: delta.content },
           };
           yield textDelta;
+        }
+
+        // Accumulate reasoning_details (e.g. Gemini's reasoning.encrypted blocks)
+        if (delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
+          accumulatedReasoningDetails.push(...delta.reasoning_details);
         }
 
         // Handle tool calls
@@ -695,6 +726,11 @@ async function* stream(
         stop_reason: hasToolCalls ? ("tool_use" as const) : ("end_turn" as const),
       },
       usage: { output_tokens: 0 },
+      // Pass accumulated reasoning_details so the agent loop can store them
+      // on the assistant message for subsequent turns
+      ...(accumulatedReasoningDetails.length > 0
+        ? { reasoning_details: accumulatedReasoningDetails }
+        : {}),
     };
     yield messageDelta;
 

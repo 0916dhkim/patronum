@@ -185,6 +185,7 @@ export async function runAgentStreaming(
       const contentBlocks: ContentBlock[] = [];
       const toolUseBlocks: ToolUseBlock[] = []; // also tracked separately for tool execution
       let stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" = "end_turn";
+      let reasoningDetails: unknown[] | undefined; // OpenRouter reasoning_details for multi-turn
       let currentBlockType: "text" | "tool_use" | "thinking" | "redacted_thinking" | null = null;
       let currentTextBlockText = "";
       let currentToolUseId = "";
@@ -276,6 +277,11 @@ export async function runAgentStreaming(
           currentBlockType = null;
         } else if (event.type === "message_delta") {
           stopReason = event.delta.stop_reason;
+          // Capture reasoning_details from the stream (e.g. Gemini's
+          // reasoning.encrypted blocks) for passing back on subsequent turns
+          if (event.reasoning_details && event.reasoning_details.length > 0) {
+            reasoningDetails = event.reasoning_details;
+          }
         }
       }
 
@@ -285,6 +291,11 @@ export async function runAgentStreaming(
         role: "assistant",
         content,
       };
+      // Preserve reasoning_details for models that need them passed back
+      // (e.g. Gemini via OpenRouter — without these, subsequent turns return empty)
+      if (reasoningDetails && reasoningDetails.length > 0) {
+        assistantMessage.reasoning_details = reasoningDetails;
+      }
       conversation.push(assistantMessage);
       newMessages.push(assistantMessage);
 
@@ -455,7 +466,12 @@ function sanitizeMessages(messages: Message[]): Message[] {
           });
 
           if (cleanedContent.length > 0) {
-            result.push({ role: msg.role, content: cleanedContent });
+            const cleanedMsg: Message = { role: msg.role, content: cleanedContent };
+            // Preserve reasoning_details when stripping orphaned tool_use blocks
+            if (msg.reasoning_details) {
+              cleanedMsg.reasoning_details = msg.reasoning_details;
+            }
+            result.push(cleanedMsg);
           } else {
             console.warn(`[sanitize] Dropping assistant message at index ${i} — only contained orphaned tool_use blocks`);
           }
@@ -502,6 +518,13 @@ function sanitizeMessages(messages: Message[]): Message[] {
 
     // Merge by concatenating content arrays
     previous.content = [...prevContent, ...currentContent];
+    // Preserve reasoning_details from both messages when merging
+    if (current.reasoning_details) {
+      previous.reasoning_details = [
+        ...(previous.reasoning_details ?? []),
+        ...current.reasoning_details,
+      ];
+    }
   }
 
   return merged;
@@ -528,6 +551,11 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
       role: "assistant",
       content: response.content,
     };
+    // Preserve reasoning_details for models that need them passed back
+    // (e.g. Gemini via OpenRouter — without these, subsequent turns return empty)
+    if (response.reasoning_details) {
+      assistantMessage.reasoning_details = response.reasoning_details;
+    }
     conversation.push(assistantMessage);
     newMessages.push(assistantMessage);
 

@@ -209,6 +209,11 @@ export async function runAgentWithThread(
         role: "assistant",
         content: response.content,
       };
+      // Preserve reasoning_details for models that need them passed back
+      // (e.g. Gemini via OpenRouter — without these, subsequent turns return empty)
+      if (response.reasoning_details) {
+        assistantMessage.reasoning_details = response.reasoning_details;
+      }
       messages.push(assistantMessage);
       lastAssistantContent = response.content;
 

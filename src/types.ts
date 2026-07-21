@@ -51,6 +51,12 @@ export interface CacheControl {
 export interface Message {
   role: "user" | "assistant";
   content: string | ContentBlock[];
+  /**
+   * OpenRouter-specific reasoning details (e.g. Gemini's reasoning.encrypted blocks).
+   * Must be passed back to the API on subsequent turns for models that produce them,
+   * otherwise the model loses its reasoning context and may return empty responses.
+   */
+  reasoning_details?: unknown[];
 }
 
 export interface ToolDefinition {
@@ -68,6 +74,12 @@ export interface ClaudeResponse {
   model: string;
   stop_reason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence";
   usage: ClaudeUsage;
+  /**
+   * OpenRouter-specific reasoning details (e.g. Gemini's reasoning.encrypted blocks).
+   * Must be passed back to the API on subsequent turns for models that produce them,
+   * otherwise the model loses its reasoning context and may return empty responses.
+   */
+  reasoning_details?: unknown[];
 }
 
 export interface ClaudeUsage {
@@ -129,6 +141,12 @@ export interface StreamMessageDelta {
   type: "message_delta";
   delta: { stop_reason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" };
   usage: { output_tokens: number };
+  /**
+   * OpenRouter-specific reasoning details accumulated during streaming.
+   * Present when the model (e.g. Gemini) emits reasoning_details that must be
+   * passed back on subsequent turns.
+   */
+  reasoning_details?: unknown[];
 }
 
 export interface StreamMessageStop {
