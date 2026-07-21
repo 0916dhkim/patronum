@@ -174,3 +174,58 @@ export function getAgentOverrides(): Record<string, { model?: string }> {
   const { tomlPath, data } = loadPatronumToml(workspace);
   return (getOptionalTable(data, "agents", tomlPath) ?? {}) as Record<string, { model?: string }>;
 }
+
+export interface ModelRoutingConfig {
+  providerOrder?: string[];
+  quantizations?: string[];
+  allowFallbacks?: boolean;
+}
+
+/**
+ * Look up per-model OpenRouter provider routing config.
+ * Re-reads TOML on each call so config changes take effect without restart.
+ * Returns undefined if the [models] section is missing or the model isn't listed.
+ */
+export function getModelRoutingConfig(modelId: string): ModelRoutingConfig | undefined {
+  const workspace = config.workspace || findWorkspace();
+  const { tomlPath, data } = loadPatronumToml(workspace);
+  const modelsTable = getOptionalTable(data, "models", tomlPath);
+  if (!modelsTable) return undefined;
+
+  const modelEntry = modelsTable[modelId];
+  if (!isRecord(modelEntry)) return undefined;
+
+  const routing: ModelRoutingConfig = {};
+
+  if ("provider_order" in modelEntry) {
+    const value = modelEntry.provider_order;
+    if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+      throw new Error(
+        `Invalid config at models."${modelId}".provider_order in ${tomlPath}: expected string array`,
+      );
+    }
+    routing.providerOrder = value as string[];
+  }
+
+  if ("quantizations" in modelEntry) {
+    const value = modelEntry.quantizations;
+    if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+      throw new Error(
+        `Invalid config at models."${modelId}".quantizations in ${tomlPath}: expected string array`,
+      );
+    }
+    routing.quantizations = value as string[];
+  }
+
+  if ("allow_fallbacks" in modelEntry) {
+    const value = modelEntry.allow_fallbacks;
+    if (typeof value !== "boolean") {
+      throw new Error(
+        `Invalid config at models."${modelId}".allow_fallbacks in ${tomlPath}: expected boolean`,
+      );
+    }
+    routing.allowFallbacks = value;
+  }
+
+  return routing;
+}

@@ -3,7 +3,7 @@
  * Translates Anthropic-format messages to OpenAI format and back.
  */
 
-import { config } from "../config.js";
+import { config, getModelRoutingConfig } from "../config.js";
 import type {
   Message,
   ClaudeResponse,
@@ -25,6 +25,23 @@ const API_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const CONTEXT_WINDOWS: Record<string, number> = {
   "z-ai/glm-5.2": 1_048_576,
 };
+
+/**
+ * Build the OpenRouter `provider` object from per-model routing config.
+ * Returns undefined if the model has no config entry.
+ * Only includes fields that are actually set.
+ */
+function buildProviderObject(modelId: string): Record<string, unknown> | undefined {
+  const routing = getModelRoutingConfig(modelId);
+  if (!routing) return undefined;
+
+  const provider: Record<string, unknown> = {};
+  if (routing.providerOrder) provider.order = routing.providerOrder;
+  if (routing.quantizations) provider.quantizations = routing.quantizations;
+  if (routing.allowFallbacks !== undefined) provider.allow_fallbacks = routing.allowFallbacks;
+
+  return Object.keys(provider).length > 0 ? provider : undefined;
+}
 
 /**
  * Strip the Claude Code identity string from system prompt.
@@ -335,9 +352,10 @@ async function call(
     body.tool_choice = translateToolChoice(toolChoice);
   }
 
-  // Pin z-ai/glm-5.2 to z.ai servers with fp8 quantization
-  if (model === "z-ai/glm-5.2") {
-    body.provider = { order: ["z-ai"], quantizations: ["fp8"] };
+  // Apply per-model provider routing from config
+  const provider = buildProviderObject(model);
+  if (provider) {
+    body.provider = provider;
   }
 
   // Compose caller signal with timeout
@@ -446,9 +464,10 @@ async function* stream(
     body.tool_choice = translateToolChoice(toolChoice);
   }
 
-  // Pin z-ai/glm-5.2 to z.ai servers with fp8 quantization
-  if (model === "z-ai/glm-5.2") {
-    body.provider = { order: ["z-ai"], quantizations: ["fp8"] };
+  // Apply per-model provider routing from config
+  const provider = buildProviderObject(model);
+  if (provider) {
+    body.provider = provider;
   }
 
   // Compose caller signal with timeout
