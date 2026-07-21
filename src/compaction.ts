@@ -30,9 +30,10 @@ const CHARS_PER_TOKEN = 3;
 // calculations.
 const SAFETY_MARGIN_TOKENS = 5000;
 
-// Minimum chunk size (in chars) — prevents absurdly small chunks on models
-// with tiny context windows.
-const MIN_CHUNK_CHARS = 10_000;
+// Minimum context window (in tokens) required for compaction to be safe.
+// Below this, there is not enough room for system prompt + output + safety
+// margin, so compaction must be skipped.
+const MIN_USABLE_CONTEXT_TOKENS = 10_000;
 
 // ---------------------------------------------------------------------------
 // Prompts
@@ -83,11 +84,33 @@ Requirements:
 /**
  * Fetch the context window size for a model using the provider abstraction.
  * For Anthropic models, queries the Anthropic models API.
- * For OpenRouter models, uses the hardcoded lookup table (with a 200k fallback
- * + warning for unknown models).
+ * For OpenRouter models, queries the OpenRouter model metadata API with
+ * caching and a local fallback table; throws if the model cannot be resolved
+ * (no silent arbitrary fallback for unknown models).
  */
 export async function getContextWindow(model: string): Promise<number> {
   return getProviderContextWindow(model);
+}
+
+/**
+ * Validate that a context window is large enough for safe compaction.
+ *
+ * Returns true if the window has enough room for the system prompt,
+ * max output, and safety margin.  Returns false if the window is too
+ * small or invalid (<= 0).
+ *
+ * Exported for testing.
+ */
+export function isContextWindowUsable(contextWindow: number): boolean {
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return false;
+
+  const systemPromptChars = COMPACTION_SYSTEM_PROMPT.length;
+  const estimatedSystemPromptTokens = Math.ceil(systemPromptChars / CHARS_PER_TOKEN);
+
+  const usableTokens =
+    contextWindow - estimatedSystemPromptTokens - MAX_SUMMARY_OUTPUT_TOKENS - SAFETY_MARGIN_TOKENS;
+
+  return usableTokens >= MIN_USABLE_CONTEXT_TOKENS;
 }
 
 /**
@@ -95,14 +118,24 @@ export async function getContextWindow(model: string): Promise<number> {
  *
  * Formula:
  *   availableTokens = contextWindow - systemPromptTokens - maxOutputTokens - safetyMargin
- *   chunkChars     = max(availableTokens, floor) * charsPerToken
+ *   chunkChars     = availableTokens * charsPerToken
  *
  * This ensures each summarization call stays within the model's context window
  * after accounting for the system prompt, output budget, and safety margin.
  *
+ * The output NEVER exceeds the safe usable context — if the window is too
+ * small, this function throws so the caller can skip compaction.
+ *
  * Exported for testing.
  */
 export function computeChunkCharBudget(contextWindow: number): number {
+  if (!isContextWindowUsable(contextWindow)) {
+    throw new Error(
+      `[compaction] Context window ${contextWindow} is too small for safe compaction ` +
+        `(requires at least ${MIN_USABLE_CONTEXT_TOKENS} usable tokens after overhead) — skipping`
+    );
+  }
+
   const systemPromptChars = COMPACTION_SYSTEM_PROMPT.length;
   const estimatedSystemPromptTokens = Math.ceil(systemPromptChars / CHARS_PER_TOKEN);
 
@@ -112,8 +145,7 @@ export function computeChunkCharBudget(contextWindow: number): number {
     MAX_SUMMARY_OUTPUT_TOKENS -
     SAFETY_MARGIN_TOKENS;
 
-  const safeTokens = Math.max(availableTokens, Math.floor(MIN_CHUNK_CHARS / CHARS_PER_TOKEN));
-  return Math.floor(safeTokens * CHARS_PER_TOKEN);
+  return Math.floor(availableTokens * CHARS_PER_TOKEN);
 }
 
 /**
@@ -122,6 +154,8 @@ export function computeChunkCharBudget(contextWindow: number): number {
  *
  * The merge call receives all chunk summaries concatenated plus a system prompt.
  * Each chunk summary is at most MAX_SUMMARY_OUTPUT_TOKENS tokens.
+ *
+ * Throws if the context window is too small for even a single chunk summary.
  *
  * Exported for testing.
  */
@@ -138,8 +172,14 @@ export function computeMaxMergeChunks(contextWindow: number): number {
     MAX_SUMMARY_OUTPUT_TOKENS -
     SAFETY_MARGIN_TOKENS;
 
-  const safeMergeTokens = Math.max(availableMergeTokens, maxSummaryTokensPerChunk);
-  return Math.max(1, Math.floor(safeMergeTokens / maxSummaryTokensPerChunk));
+  if (availableMergeTokens <= 0) {
+    throw new Error(
+      `[compaction] Context window ${contextWindow} too small for merge — ` +
+        `requires at least ${estimatedMergeSystemTokens + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS} tokens`
+    );
+  }
+
+  return Math.max(1, Math.floor(availableMergeTokens / maxSummaryTokensPerChunk));
 }
 
 /**
@@ -433,7 +473,17 @@ export async function compactIfNeeded(
   inputTokens: number,
   model: string
 ): Promise<{ messages: Message[]; compacted: boolean }> {
-  const contextWindow = await getContextWindow(model);
+  let contextWindow: number;
+  try {
+    contextWindow = await getContextWindow(model);
+  } catch (err) {
+    console.error(
+      `[compaction] Failed to resolve context window for ${model} — skipping compaction:`,
+      err instanceof Error ? err.message : err
+    );
+    return { messages, compacted: false };
+  }
+
   const threshold = Math.floor(contextWindow * COMPACTION_THRESHOLD_RATIO);
 
   console.log(
@@ -442,6 +492,16 @@ export async function compactIfNeeded(
   );
 
   if (inputTokens < threshold) {
+    return { messages, compacted: false };
+  }
+
+  // Validate that the context window is large enough for safe compaction.
+  // If not, skip with an observable log rather than producing chunks that
+  // exceed the safe usable context.
+  if (!isContextWindowUsable(contextWindow)) {
+    console.warn(
+      `[compaction] Context window ${contextWindow} is too small for safe compaction — skipping`
+    );
     return { messages, compacted: false };
   }
 

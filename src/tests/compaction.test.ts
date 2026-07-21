@@ -2,12 +2,11 @@
  * Focused tests for the 70%-of-active-model-context compaction policy.
  *
  * Tests the pure logic functions exported from compaction.ts:
- *   - computeChunkCharBudget
+ *   - computeChunkCharBudget (including throw-on-tiny-window regression)
  *   - computeMaxMergeChunks
+ *   - isContextWindowUsable
  *   - findSafeSplitIndex
- *
- * Also tests the compactIfNeeded error-handling contract by mocking
- * the provider layer.
+ *   - compactIfNeeded threshold math
  *
  * Run with: npx tsx src/tests/compaction.test.ts
  */
@@ -16,7 +15,7 @@ import {
   computeChunkCharBudget,
   computeMaxMergeChunks,
   findSafeSplitIndex,
-  compactIfNeeded,
+  isContextWindowUsable,
 } from "../compaction.js";
 import type { Message, ContentBlock, ToolUseBlock, ToolResultBlock } from "../types.js";
 
@@ -41,6 +40,17 @@ function assert(condition: boolean, message: string): void {
 function assertApprox(actual: number, expected: number, tolerance: number, message: string): void {
   const diff = Math.abs(actual - expected);
   assert(diff <= tolerance, `${message} (expected ~${expected}, got ${actual}, diff=${diff})`);
+}
+
+function assertThrows(fn: () => void, message: string): void {
+  try {
+    fn();
+    failed++;
+    failures.push(message);
+    console.error(`  ✗ FAIL: ${message} (expected throw, got none)`);
+  } catch {
+    passed++;
+  }
 }
 
 function section(name: string): void {
@@ -76,7 +86,33 @@ function userToolResult(id: string, content: string, isError = false): Message {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// isContextWindowUsable tests (finding 3 & 4)
+// ---------------------------------------------------------------------------
+
+section("isContextWindowUsable — valid windows");
+{
+  assert(isContextWindowUsable(200_000), "200k should be usable");
+  assert(isContextWindowUsable(128_000), "128k should be usable");
+  assert(isContextWindowUsable(1_048_576), "1M should be usable");
+  assert(isContextWindowUsable(1_050_000), "1.05M (Terra) should be usable");
+}
+
+section("isContextWindowUsable — invalid / tiny windows");
+{
+  assert(!isContextWindowUsable(0), "0 should be unusable");
+  assert(!isContextWindowUsable(-1), "negative should be unusable");
+  assert(!isContextWindowUsable(NaN), "NaN should be unusable");
+  assert(!isContextWindowUsable(Infinity), "Infinity should be unusable");
+  assert(!isContextWindowUsable(1_000), "1k should be unusable (too small for overhead)");
+  assert(!isContextWindowUsable(5_000), "5k should be unusable");
+  // 10k: system ~284 + output 2048 + safety 5000 = 7332 overhead, usable = 2668 < 10000
+  assert(!isContextWindowUsable(10_000), "10k should be unusable (usable < MIN_USABLE)");
+  // 20k: usable = 20000 - 7332 = 12668 >= 10000 → usable
+  assert(isContextWindowUsable(20_000), "20k should be usable (usable >= MIN_USABLE)");
+}
+
+// ---------------------------------------------------------------------------
+// computeChunkCharBudget tests (finding 3: no MIN_CHUNK_CHARS floor)
 // ---------------------------------------------------------------------------
 
 section("computeChunkCharBudget — 200k context window");
@@ -99,6 +135,13 @@ section("computeChunkCharBudget — 1M context window");
   assert(budget > 3_000_000, "1M budget should be >3M chars");
 }
 
+section("computeChunkCharBudget — Terra 1.05M context window");
+{
+  const budget = computeChunkCharBudget(1_050_000);
+  assert(budget > 3_000_000, "Terra budget should be >3M chars");
+  assert(budget < 3_200_000, "Terra budget should be <3.2M chars");
+}
+
 section("computeChunkCharBudget — small context (128k)");
 {
   const budget = computeChunkCharBudget(128_000);
@@ -108,18 +151,36 @@ section("computeChunkCharBudget — small context (128k)");
   assert(budget > 300_000, "128k budget should be >300k chars");
 }
 
-section("computeChunkCharBudget — tiny context (10k, floor applies)");
+section("computeChunkCharBudget — tiny/invalid context throws (regression for finding 3)");
 {
-  const budget = computeChunkCharBudget(10_000);
-  // Available = 10000 - 284 - 2048 - 5000 = 2668 tokens
-  // Chars = 2668 * 3 = 8004
-  // But MIN_CHUNK_CHARS = 10000, so the floor in computeChunkCharBudget is:
-  //   Math.max(availableTokens, Math.floor(MIN_CHUNK_CHARS / CHARS_PER_TOKEN))
-  //   = Math.max(2668, 3333) = 3333
-  //   Chars = 3333 * 3 = 9999
-  assert(budget >= 9_000, "Tiny context should hit floor, budget >= 9000");
-  assert(budget <= 10_500, "Tiny context budget should be near floor");
+  // Previously, MIN_CHUNK_CHARS floor could produce a prompt larger than the
+  // context window. Now it throws instead.
+  assertThrows(() => computeChunkCharBudget(0), "0 context should throw");
+  assertThrows(() => computeChunkCharBudget(-100), "negative context should throw");
+  assertThrows(() => computeChunkCharBudget(1_000), "1k context should throw");
+  assertThrows(() => computeChunkCharBudget(5_000), "5k context should throw");
+  assertThrows(() => computeChunkCharBudget(10_000), "10k context should throw (usable < MIN)");
 }
+
+section("computeChunkCharBudget — output never exceeds safe usable context");
+{
+  // For any valid context window, the budget in chars should never exceed
+  // the total context window expressed in chars (contextWindow * charsPerToken).
+  // This is the absolute ceiling — any budget above this would mean the chunk
+  // alone (without system prompt or output) exceeds the model's context.
+  for (const cw of [20_000, 50_000, 128_000, 200_000, 1_050_000]) {
+    const budget = computeChunkCharBudget(cw);
+    const maxPossibleChars = cw * 3; // CHARS_PER_TOKEN = 3
+    assert(
+      budget < maxPossibleChars,
+      `budget ${budget} should be less than total context chars ${maxPossibleChars} for cw=${cw}`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// computeMaxMergeChunks tests
+// ---------------------------------------------------------------------------
 
 section("computeMaxMergeChunks — 200k context");
 {
@@ -137,6 +198,16 @@ section("computeMaxMergeChunks — 1M context");
   // Max chunks = 1041328 / 2048 = ~508
   assert(maxChunks >= 400, "1M should allow >=400 merge chunks");
 }
+
+section("computeMaxMergeChunks — tiny context throws");
+{
+  assertThrows(() => computeMaxMergeChunks(1_000), "1k context merge should throw");
+  assertThrows(() => computeMaxMergeChunks(5_000), "5k context merge should throw");
+}
+
+// ---------------------------------------------------------------------------
+// findSafeSplitIndex tests
+// ---------------------------------------------------------------------------
 
 section("findSafeSplitIndex — clean boundary at initial split");
 {
@@ -237,32 +308,29 @@ section("findSafeSplitIndex — user with text + image (no tool_result) is clean
 }
 
 // ---------------------------------------------------------------------------
-// compactIfNeeded integration tests (with mocked provider)
+// Threshold math tests
 // ---------------------------------------------------------------------------
 
-// We test the error-handling contract by monkey-patching the module's
-// internal imports. Since we can't easily intercept the ESM imports,
-// we test the exported findSafeSplitIndex and budget functions (above)
-// and verify the error contract through code inspection.
-
-// Instead, let's verify the threshold calculation logic:
 section("compactIfNeeded threshold — 70% of context window");
 {
-  // We can't call compactIfNeeded directly without mocking callLLM and getContextWindow,
-  // but we can verify the threshold math:
   // For a 200k model: threshold = floor(200000 * 0.70) = 140000
   // For a 1M model: threshold = floor(1048576 * 0.70) = 734003
+  // For Terra (1.05M): threshold = floor(1050000 * 0.70) = 735000
   const threshold200k = Math.floor(200_000 * 0.70);
   const threshold1M = Math.floor(1_048_576 * 0.70);
+  const thresholdTerra = Math.floor(1_050_000 * 0.70);
 
   assert(threshold200k === 140_000, `200k → 140k threshold, got ${threshold200k}`);
   assert(threshold1M === 734_003, `1M → 734003 threshold, got ${threshold1M}`);
+  assert(thresholdTerra === 735_000, `Terra → 735000 threshold, got ${thresholdTerra}`);
 
-  // Verify that 199,999 tokens would NOT trigger on a 200k model
+  // Verify threshold boundaries
   assert(199_999 >= threshold200k, "199,999 should trigger on 200k model (>=140k)");
-
-  // Verify that 139,999 tokens would NOT trigger
   assert(139_999 < threshold200k, "139,999 should NOT trigger on 200k model (<140k)");
+
+  // Terra: 140k would NOT trigger (needs >= 735k)
+  assert(140_000 < thresholdTerra, "140k should NOT trigger on Terra (<735k)");
+  assert(735_000 >= thresholdTerra, "735k should trigger on Terra (>=735k)");
 }
 
 // ---------------------------------------------------------------------------

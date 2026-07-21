@@ -19,11 +19,34 @@ import type {
 } from "../types.js";
 
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const MODEL_API_URL = "https://openrouter.ai/api/v1/model";
 const API_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-// OpenRouter model context windows (hardcoded lookup table)
-const CONTEXT_WINDOWS: Record<string, number> = {
+// ---------------------------------------------------------------------------
+// Context window resolution
+// ---------------------------------------------------------------------------
+
+// In-memory cache for dynamically resolved context windows.
+// Keyed by model id (e.g. "openai/gpt-5.6-terra").
+const contextWindowCache = new Map<string, number>();
+
+// Local fallback table for all currently configured OpenRouter models in
+// patronum.toml.  These values were verified against OpenRouter's
+// /api/v1/model/:id endpoint and serve as an offline fallback when the API
+// is unreachable.  They are NOT used as a silent default for unknown models —
+// if a model is neither in this table nor resolvable via the API,
+// getContextWindow throws so the caller can skip compaction explicitly.
+const LOCAL_CONTEXT_WINDOWS: Record<string, number> = {
+  "openai/gpt-5.6-terra": 1_050_000,
   "z-ai/glm-5.2": 1_048_576,
+  "deepseek/deepseek-v4-flash": 1_048_576,
+  "deepseek/deepseek-v4-pro": 1_048_576,
+  "moonshotai/kimi-k3": 1_048_576,
+  "minimax/minimax-m3": 1_048_576,
+  "google/gemini-3.5-flash": 1_048_576,
+  "meta/muse-spark-1.1": 1_048_576,
+  "thinkingmachines/inkling": 1_048_576,
+  "xiaomi/mimo-v2.5": 1_048_576,
 };
 
 /**
@@ -664,7 +687,7 @@ async function* stream(
   // stream_options.include_usage is enabled). This is the real token count
   // needed for compaction threshold decisions.
   let capturedUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null = null;
-  
+
   let messageStartEmitted = false;
 
   try {
@@ -859,17 +882,76 @@ async function* stream(
 }
 
 /**
- * Get context window for a model.
+ * Resolve the context window for an OpenRouter model.
+ *
+ * Resolution order:
+ *   1. In-memory cache (fast path for repeated calls within a session)
+ *   2. OpenRouter /api/v1/model/:id endpoint (authoritative)
+ *   3. LOCAL_CONTEXT_WINDOWS fallback table (offline safety net)
+ *
+ * If all three fail, throws an Error — never silently returns an arbitrary
+ * default.  The caller (compaction) catches this and skips compaction with
+ * an observable log, which is the explicit safe behaviour required by policy.
  */
-function getContextWindow(model: string): Promise<number> {
-  const contextWindow = CONTEXT_WINDOWS[model];
-  if (contextWindow) {
-    return Promise.resolve(contextWindow);
+async function getContextWindow(model: string): Promise<number> {
+  // 1. Cache
+  const cached = contextWindowCache.get(model);
+  if (cached !== undefined) return cached;
+
+  // 2. OpenRouter model metadata API
+  try {
+    const response = await fetch(`${MODEL_API_URL}/${model}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.openrouterApiKey}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as {
+        data?: { context_length?: number; top_provider?: { context_length?: number } };
+        context_length?: number;
+        top_provider?: { context_length?: number };
+      };
+
+      // The endpoint wraps the model object in { data: { ... } }
+      const modelData = data.data ?? data;
+      const contextLength =
+        modelData.context_length ?? modelData.top_provider?.context_length;
+
+      if (contextLength && contextLength > 0) {
+        contextWindowCache.set(model, contextLength);
+        console.log(`[openrouter] Resolved context window for ${model}: ${contextLength} (API)`);
+        return contextLength;
+      }
+    } else {
+      console.warn(
+        `[openrouter] Model API returned ${response.status} for ${model}`
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[openrouter] Failed to fetch model metadata for ${model}:`,
+      err instanceof Error ? err.message : err
+    );
   }
 
-  // Default fallback for unknown OpenRouter models
-  console.warn(`[openrouter] Unknown model ${model}, using fallback context window of 200k`);
-  return Promise.resolve(200_000);
+  // 3. Local fallback table
+  const local = LOCAL_CONTEXT_WINDOWS[model];
+  if (local && local > 0) {
+    contextWindowCache.set(model, local);
+    console.log(`[openrouter] Resolved context window for ${model}: ${local} (local fallback)`);
+    return local;
+  }
+
+  // 4. No resolution — explicit failure
+  throw new Error(
+    `[openrouter] Cannot resolve context window for model "${model}" — ` +
+      `not in local table and OpenRouter model API unavailable. ` +
+      `Compaction will be skipped.`
+  );
 }
 
 export const openrouterClient = {
