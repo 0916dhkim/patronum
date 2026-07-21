@@ -329,6 +329,7 @@ async function call(
     thinking?: boolean;
     maxTokens?: number;
     completedPrefixLength?: number;
+    reasoningEffort?: string;
   },
   signal?: AbortSignal,
   toolChoice?: { type: "tool"; name: string } | { type: "auto" }
@@ -361,6 +362,11 @@ async function call(
   const provider = buildProviderObject(model);
   if (provider) {
     body.provider = provider;
+  }
+
+  // Pass reasoning_effort if specified (OpenRouter-specific parameter)
+  if (options?.reasoningEffort) {
+    body.reasoning_effort = options.reasoningEffort;
   }
 
   // Compose caller signal with timeout
@@ -440,6 +446,7 @@ async function* stream(
     thinking?: boolean;
     maxTokens?: number;
     completedPrefixLength?: number;
+    reasoningEffort?: string;
   },
   signal?: AbortSignal,
   toolChoice?: { type: "tool"; name: string } | { type: "auto" }
@@ -473,6 +480,11 @@ async function* stream(
   const provider = buildProviderObject(model);
   if (provider) {
     body.provider = provider;
+  }
+
+  // Pass reasoning_effort if specified (OpenRouter-specific parameter)
+  if (options?.reasoningEffort) {
+    body.reasoning_effort = options.reasoningEffort;
   }
 
   // Compose caller signal with timeout

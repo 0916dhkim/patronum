@@ -9,6 +9,7 @@ export interface AgentDef {
   description: string; // from SUBAGENT.md frontmatter — used for routing
   systemPrompt: string; // body of SUBAGENT.md (below frontmatter)
   thinking?: boolean; // enable extended thinking for this agent
+  reasoningEffort?: string; // OpenRouter reasoning_effort (e.g. "high", "medium", "low")
 }
 
 interface SubagentFrontmatter {
@@ -90,6 +91,7 @@ function loadAgentFiles(): ParsedSubagent[] {
     // Check for model override in config [agents.xxx]
     const agentOverrides = getAgentOverrides();
     const configModel = agentOverrides[name]?.model;
+    const reasoningEffort = agentOverrides[name]?.reasoningEffort;
     const model = configModel || frontmatter.model || config.claudeModel;
 
     parsed.push({
@@ -101,6 +103,7 @@ function loadAgentFiles(): ParsedSubagent[] {
         description,
         systemPrompt: body,
         thinking: thinking || undefined,
+        reasoningEffort,
       },
     });
   }

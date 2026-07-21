@@ -169,10 +169,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // Export agent overrides so agents.ts can use them
-export function getAgentOverrides(): Record<string, { model?: string }> {
+export function getAgentOverrides(): Record<string, { model?: string; reasoningEffort?: string }> {
   const workspace = config.workspace || findWorkspace();
   const { tomlPath, data } = loadPatronumToml(workspace);
-  return (getOptionalTable(data, "agents", tomlPath) ?? {}) as Record<string, { model?: string }>;
+  const agentsTable = getOptionalTable(data, "agents", tomlPath) ?? {};
+
+  // Normalize TOML snake_case fields to camelCase for TypeScript consumers
+  const result: Record<string, { model?: string; reasoningEffort?: string }> = {};
+  for (const [name, entry] of Object.entries(agentsTable)) {
+    if (isRecord(entry)) {
+      result[name] = {
+        model: typeof entry.model === "string" ? entry.model : undefined,
+        reasoningEffort: typeof entry.reasoning_effort === "string" ? entry.reasoning_effort : undefined,
+      };
+    }
+  }
+  return result;
 }
 
 export interface ModelRoutingConfig {

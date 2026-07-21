@@ -33,6 +33,7 @@ export async function callLLM(
     thinking?: boolean;
     maxTokens?: number;
     completedPrefixLength?: number;
+    reasoningEffort?: string;
   },
   signal?: AbortSignal,
   toolChoice?: { type: "tool"; name: string } | { type: "auto" }
@@ -59,6 +60,7 @@ export async function callLLMStreaming(
     thinking?: boolean;
     maxTokens?: number;
     completedPrefixLength?: number;
+    reasoningEffort?: string;
   },
   signal?: AbortSignal,
   toolChoice?: { type: "tool"; name: string } | { type: "auto" }

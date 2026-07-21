@@ -74,6 +74,7 @@ async function callClaudeForAgent(
     {
       thinking: agent.thinking && toolChoice?.type !== "tool",
       maxTokens: MAX_TOKENS,
+      reasoningEffort: agent.reasoningEffort,
     },
     signal,
     toolChoice

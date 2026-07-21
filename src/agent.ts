@@ -48,6 +48,8 @@ export interface AgentOptions {
   skillOverrides?: SkillOverrides;
   /** Enable extended thinking mode */
   thinking?: boolean;
+  /** OpenRouter reasoning_effort (e.g. "high", "medium", "low") */
+  reasoningEffort?: string;
 }
 
 export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text"; text: string }> {
@@ -100,6 +102,7 @@ async function callClaude(
       thinking: options?.thinking,
       maxTokens: MAX_TOKENS,
       completedPrefixLength,
+      reasoningEffort: options?.reasoningEffort,
     },
     signal
   );
@@ -123,6 +126,7 @@ async function callClaudeStreaming(
       thinking: options?.thinking,
       maxTokens: MAX_TOKENS,
       completedPrefixLength,
+      reasoningEffort: options?.reasoningEffort,
     },
     signal
   );
