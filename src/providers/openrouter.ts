@@ -263,7 +263,11 @@ function translateResponse(openaiResponse: {
       tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
     };
   }>;
-  usage: { prompt_tokens: number; completion_tokens: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  } | null;
 }): ClaudeResponse {
   const choice = openaiResponse.choices[0];
   const message = choice.message;
@@ -303,6 +307,12 @@ function translateResponse(openaiResponse: {
       ? ("tool_use" as const)
       : ("end_turn" as const);
 
+  // Safely extract usage stats — some providers (e.g. Gemini via OpenRouter)
+  // may omit the usage object entirely or use different field names.
+  const usage = openaiResponse.usage;
+  const inputTokens = usage?.prompt_tokens ?? 0;
+  const outputTokens = usage?.completion_tokens ?? 0;
+
   return {
     id: "msg-openrouter",
     type: "message",
@@ -311,8 +321,8 @@ function translateResponse(openaiResponse: {
     model: "openrouter",
     stop_reason: stopReason,
     usage: {
-      input_tokens: openaiResponse.usage.prompt_tokens,
-      output_tokens: openaiResponse.usage.completion_tokens,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
     },
   };
 }
@@ -398,7 +408,11 @@ async function call(
           tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
         };
       }>;
-      usage: { prompt_tokens: number; completion_tokens: number };
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      } | null;
     };
 
     return translateResponse(openaiResponse);
