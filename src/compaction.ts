@@ -21,9 +21,15 @@ const MAX_TOOL_RESULT_CHARS = 400;
 // Max output tokens for each summarization / merge LLM call.
 const MAX_SUMMARY_OUTPUT_TOKENS = 2048;
 
-// Conservative chars-per-token estimate. Some tokenizers are closer to 3 than 4;
-// using 3 gives us a safety margin on chunk sizing.
-const CHARS_PER_TOKEN = 3;
+// Conservative chars-per-token bound. A value of 1 means "at most 1 token per
+// character" — the worst case for dense tokenizers (CJK text, code, JSON with
+// many special characters). This is genuinely conservative: even if every
+// character in a transcript chunk is its own token, the chunk will not exceed
+// the model's context window. English text typically tokenizes at ~3–4
+// chars/token, so real usage will be well under budget — the cost of this
+// conservatism is smaller chunk sizes (more summarization calls), not
+// correctness.
+const CHARS_PER_TOKEN = 1;
 
 // Safety margin in tokens reserved for system prompt overhead, framing text,
 // and tokenizer variance. Applied to both summarization and merge budget
@@ -118,10 +124,12 @@ export function isContextWindowUsable(contextWindow: number): boolean {
  *
  * Formula:
  *   availableTokens = contextWindow - systemPromptTokens - maxOutputTokens - safetyMargin
- *   chunkChars     = availableTokens * charsPerToken
+ *   chunkChars     = availableTokens * CHARS_PER_TOKEN
  *
- * This ensures each summarization call stays within the model's context window
- * after accounting for the system prompt, output budget, and safety margin.
+ * With CHARS_PER_TOKEN = 1, chunkChars equals availableTokens. This means
+ * even if every character in the chunk is its own token (CJK, code, JSON),
+ * the total LLM call (system prompt + chunk + output) stays within the
+ * context window.
  *
  * The output NEVER exceeds the safe usable context — if the window is too
  * small, this function throws so the caller can skip compaction.
@@ -180,6 +188,46 @@ export function computeMaxMergeChunks(contextWindow: number): number {
   }
 
   return Math.max(1, Math.floor(availableMergeTokens / maxSummaryTokensPerChunk));
+}
+
+/**
+ * Compute the safe character budget for merge input — the maximum total
+ * character length of all summaries fed into a single merge LLM call
+ * (excluding the merge system prompt and output budget).
+ *
+ * With CHARS_PER_TOKEN = 1, the char budget equals the available merge tokens.
+ * This ensures that even if every character in the concatenated summaries is
+ * its own token (worst-case dense tokenization), the merge call stays within
+ * the model's context window.
+ *
+ * Throws if the context window is too small for safe merging.
+ *
+ * Exported for testing.
+ */
+export function computeMergeInputCharBudget(contextWindow: number): number {
+  if (!isContextWindowUsable(contextWindow)) {
+    throw new Error(
+      `[compaction] Context window ${contextWindow} is too small for safe merge — skipping`
+    );
+  }
+
+  const mergeSystemPromptChars = PROGRESSIVE_MERGE_PROMPT.length;
+  const estimatedMergeSystemTokens = Math.ceil(mergeSystemPromptChars / CHARS_PER_TOKEN);
+
+  const availableMergeTokens =
+    contextWindow -
+    estimatedMergeSystemTokens -
+    MAX_SUMMARY_OUTPUT_TOKENS -
+    SAFETY_MARGIN_TOKENS;
+
+  if (availableMergeTokens <= 0) {
+    throw new Error(
+      `[compaction] Context window ${contextWindow} too small for merge — ` +
+        `requires at least ${estimatedMergeSystemTokens + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS} tokens`
+    );
+  }
+
+  return Math.floor(availableMergeTokens * CHARS_PER_TOKEN);
 }
 
 /**
@@ -377,13 +425,99 @@ async function mergeChunkSummaries(chunkSummaries: string[], model: string): Pro
 }
 
 /**
+ * Hierarchical/batched merge: group summaries by a safe merge input budget,
+ * merge each group, repeat until one final summary remains.
+ *
+ * Preserves chronological order: summaries are grouped in order, and within
+ * each group the merge prompt presents them as Chunk 1, Chunk 2, … in order.
+ *
+ * If any merge call fails or yields empty text, the error propagates to the
+ * caller (compactIfNeeded catches it and preserves live history unchanged).
+ *
+ * @param summaries       Summary strings in chronological order
+ * @param model           The active session model (no alternate/fallback)
+ * @param mergeCharBudget Safe max total chars for merge input (from
+ *                        computeMergeInputCharBudget). Each summary's
+ *                        character length plus framing overhead is counted
+ *                        against this budget.
+ */
+async function hierarchicalMerge(
+  summaries: string[],
+  model: string,
+  mergeCharBudget: number
+): Promise<string> {
+  let current = summaries;
+  let round = 0;
+
+  while (current.length > 1) {
+    round++;
+
+    // Group summaries by char budget, preserving chronological order.
+    // Each summary in a merge group has framing overhead:
+    //   "### Chunk N Summary\n" — generous upper bound ~30 chars.
+    const FRAMING_OVERHEAD = 30;
+    const groups: string[][] = [];
+    let currentGroup: string[] = [];
+    let currentGroupChars = 0;
+
+    for (const summary of current) {
+      const summaryCost = summary.length + FRAMING_OVERHEAD;
+
+      if (currentGroup.length > 0 && currentGroupChars + summaryCost > mergeCharBudget) {
+        // Current group is full — start a new one
+        groups.push(currentGroup);
+        currentGroup = [];
+        currentGroupChars = 0;
+      }
+
+      currentGroup.push(summary);
+      currentGroupChars += summaryCost;
+    }
+    if (currentGroup.length > 0) groups.push(currentGroup);
+
+    console.log(
+      `[compaction] Merge round ${round}: ${current.length} summaries → ${groups.length} group(s) ` +
+        `(budget: ${mergeCharBudget} chars)`
+    );
+
+    // Safety: if every group has exactly 1 summary, we cannot make progress.
+    // This means the merge budget is too small for even 2 summaries.
+    // isContextWindowUsable should prevent this, but guard against infinite loops.
+    if (groups.length === current.length) {
+      throw new Error(
+        `[compaction] Merge budget (${mergeCharBudget} chars) too small to merge any summaries — ` +
+          `cannot make progress. Context window may be too small for hierarchical merge.`
+      );
+    }
+
+    // Merge each group. Groups with a single summary pass through unchanged.
+    // Promise.all preserves array order so chronological order is maintained.
+    current = await Promise.all(
+      groups.map((group) => {
+        if (group.length === 1) {
+          return Promise.resolve(group[0]);
+        }
+        return mergeChunkSummaries(group, model);
+      })
+    );
+  }
+
+  return current[0];
+}
+
+/**
  * Summarize a set of messages, splitting into chunks if the transcript
- * would exceed the model's context window. Merges chunk summaries into one.
+ * would exceed the model's context window. Uses hierarchical/batched merge
+ * to combine chunk summaries into one final summary.
  *
  * Chunk size is computed dynamically from the model's context window,
  * accounting for system prompt tokens, max output tokens, and a safety margin.
- * The merge budget is also checked to ensure all chunk summaries can fit
- * in a single merge call.
+ * The merge input budget is also computed dynamically so that no merge call
+ * is ever oversized.
+ *
+ * If any summarization or merge step fails (throws or yields empty text),
+ * the error propagates to compactIfNeeded, which preserves the original
+ * live history unchanged.
  */
 async function summarizeMessages(
   messages: Message[],
@@ -391,7 +525,7 @@ async function summarizeMessages(
   contextWindow: number
 ): Promise<string> {
   const chunkCharBudget = computeChunkCharBudget(contextWindow);
-  const maxMergeChunks = computeMaxMergeChunks(contextWindow);
+  const mergeCharBudget = computeMergeInputCharBudget(contextWindow);
 
   const messageTexts = messages.map(messageToText);
 
@@ -415,21 +549,14 @@ async function summarizeMessages(
 
   console.log(
     `[compaction] Summarizing ${messages.length} messages in ${chunks.length} chunk(s) ` +
-      `(chunk budget: ${chunkCharBudget} chars, max merge: ${maxMergeChunks} chunks)`
+      `(chunk budget: ${chunkCharBudget} chars, merge budget: ${mergeCharBudget} chars)`
   );
-
-  if (chunks.length > maxMergeChunks) {
-    console.warn(
-      `[compaction] WARNING: ${chunks.length} chunks exceeds merge budget of ${maxMergeChunks} — ` +
-        `merge call may fail or truncate. Proceeding anyway.`
-    );
-  }
 
   if (chunks.length === 1) {
     return summarizeTranscript(chunks[0], false, model);
   }
 
-  // Progressive: summarize each chunk in parallel, then merge
+  // Summarize each chunk in parallel (order preserved by Promise.all)
   const chunkSummaries = await Promise.all(
     chunks.map((chunk, i) => {
       console.log(
@@ -439,8 +566,11 @@ async function summarizeMessages(
     })
   );
 
-  console.log(`[compaction] Merging ${chunkSummaries.length} chunk summaries`);
-  return mergeChunkSummaries(chunkSummaries, model);
+  // Hierarchical merge: group summaries by safe merge input budget,
+  // merge each group, repeat until one final summary. This ensures
+  // no merge call is ever oversized.
+  console.log(`[compaction] Hierarchical merge of ${chunkSummaries.length} summaries`);
+  return hierarchicalMerge(chunkSummaries, model, mergeCharBudget);
 }
 
 // ---------------------------------------------------------------------------

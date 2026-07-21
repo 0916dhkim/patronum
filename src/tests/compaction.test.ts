@@ -4,9 +4,11 @@
  * Tests the pure logic functions exported from compaction.ts:
  *   - computeChunkCharBudget (including throw-on-tiny-window regression)
  *   - computeMaxMergeChunks
+ *   - computeMergeInputCharBudget
  *   - isContextWindowUsable
  *   - findSafeSplitIndex
  *   - compactIfNeeded threshold math
+ *   - Dense tokenization safety (code/JSON/CJK at 1 char/token)
  *
  * Run with: npx tsx src/tests/compaction.test.ts
  */
@@ -14,6 +16,7 @@
 import {
   computeChunkCharBudget,
   computeMaxMergeChunks,
+  computeMergeInputCharBudget,
   findSafeSplitIndex,
   isContextWindowUsable,
 } from "../compaction.js";
@@ -56,6 +59,16 @@ function assertThrows(fn: () => void, message: string): void {
 function section(name: string): void {
   console.log(`\n── ${name} ──`);
 }
+
+// ---------------------------------------------------------------------------
+// Constants for verification (mirror compaction.ts)
+// ---------------------------------------------------------------------------
+
+const CHARS_PER_TOKEN = 1;
+const MAX_SUMMARY_OUTPUT_TOKENS = 2048;
+const SAFETY_MARGIN_TOKENS = 5000;
+const COMPACTION_SYSTEM_PROMPT_LEN = 847;
+const PROGRESSIVE_MERGE_PROMPT_LEN = 649;
 
 // ---------------------------------------------------------------------------
 // Helper: create messages
@@ -105,50 +118,52 @@ section("isContextWindowUsable — invalid / tiny windows");
   assert(!isContextWindowUsable(Infinity), "Infinity should be unusable");
   assert(!isContextWindowUsable(1_000), "1k should be unusable (too small for overhead)");
   assert(!isContextWindowUsable(5_000), "5k should be unusable");
-  // 10k: system ~284 + output 2048 + safety 5000 = 7332 overhead, usable = 2668 < 10000
+  // With CHARS_PER_TOKEN = 1: system = 847 + output 2048 + safety 5000 = 7895 overhead
+  // 10k: usable = 10000 - 7895 = 2105 < 10000
   assert(!isContextWindowUsable(10_000), "10k should be unusable (usable < MIN_USABLE)");
-  // 20k: usable = 20000 - 7332 = 12668 >= 10000 → usable
+  // 20k: usable = 20000 - 7895 = 12105 >= 10000 → usable
   assert(isContextWindowUsable(20_000), "20k should be usable (usable >= MIN_USABLE)");
 }
 
 // ---------------------------------------------------------------------------
 // computeChunkCharBudget tests (finding 3: no MIN_CHUNK_CHARS floor)
+// With CHARS_PER_TOKEN = 1, budget = contextWindow - systemPrompt - output - safety
 // ---------------------------------------------------------------------------
 
 section("computeChunkCharBudget — 200k context window");
 {
   const budget = computeChunkCharBudget(200_000);
-  // System prompt ~850 chars / 3 = ~284 tokens
-  // Available = 200000 - 284 - 2048 - 5000 = 192668 tokens
-  // Chars = 192668 * 3 = 578004
-  assertApprox(budget, 578_000, 2_000, "200k context → ~578k char budget");
-  assert(budget > 400_000, "200k budget should be >400k chars");
-  assert(budget < 600_000, "200k budget should be <600k chars");
+  // System prompt 847 chars / 1 = 847 tokens
+  // Available = 200000 - 847 - 2048 - 5000 = 192105 tokens
+  // Chars = 192105 * 1 = 192105
+  assertApprox(budget, 192_105, 100, "200k context → ~192k char budget");
+  assert(budget > 180_000, "200k budget should be >180k chars");
+  assert(budget < 200_000, "200k budget should be <200k chars");
 }
 
 section("computeChunkCharBudget — 1M context window");
 {
   const budget = computeChunkCharBudget(1_048_576);
-  // Available = 1048576 - 284 - 2048 - 5000 = 1041244
-  // Chars = 1041244 * 3 = 3123732
-  assertApprox(budget, 3_123_700, 2_000, "1M context → ~3.1M char budget");
-  assert(budget > 3_000_000, "1M budget should be >3M chars");
+  // Available = 1048576 - 847 - 2048 - 5000 = 1040681
+  // Chars = 1040681 * 1 = 1040681
+  assertApprox(budget, 1_040_681, 100, "1M context → ~1.04M char budget");
+  assert(budget > 1_000_000, "1M budget should be >1M chars");
 }
 
 section("computeChunkCharBudget — Terra 1.05M context window");
 {
   const budget = computeChunkCharBudget(1_050_000);
-  assert(budget > 3_000_000, "Terra budget should be >3M chars");
-  assert(budget < 3_200_000, "Terra budget should be <3.2M chars");
+  // Available = 1050000 - 847 - 2048 - 5000 = 1042105
+  assert(budget > 1_000_000, "Terra budget should be >1M chars");
+  assert(budget < 1_050_000, "Terra budget should be <1.05M chars");
 }
 
 section("computeChunkCharBudget — small context (128k)");
 {
   const budget = computeChunkCharBudget(128_000);
-  // Available = 128000 - 284 - 2048 - 5000 = 120668
-  // Chars = 120668 * 3 = 362004
-  assertApprox(budget, 362_000, 2_000, "128k context → ~362k char budget");
-  assert(budget > 300_000, "128k budget should be >300k chars");
+  // Available = 128000 - 847 - 2048 - 5000 = 120105
+  assertApprox(budget, 120_105, 100, "128k context → ~120k char budget");
+  assert(budget > 100_000, "128k budget should be >100k chars");
 }
 
 section("computeChunkCharBudget — tiny/invalid context throws (regression for finding 3)");
@@ -165,15 +180,123 @@ section("computeChunkCharBudget — tiny/invalid context throws (regression for 
 section("computeChunkCharBudget — output never exceeds safe usable context");
 {
   // For any valid context window, the budget in chars should never exceed
-  // the total context window expressed in chars (contextWindow * charsPerToken).
+  // the total context window expressed in chars (contextWindow * CHARS_PER_TOKEN).
   // This is the absolute ceiling — any budget above this would mean the chunk
   // alone (without system prompt or output) exceeds the model's context.
   for (const cw of [20_000, 50_000, 128_000, 200_000, 1_050_000]) {
     const budget = computeChunkCharBudget(cw);
-    const maxPossibleChars = cw * 3; // CHARS_PER_TOKEN = 3
+    const maxPossibleChars = cw * CHARS_PER_TOKEN;
     assert(
       budget < maxPossibleChars,
       `budget ${budget} should be less than total context chars ${maxPossibleChars} for cw=${cw}`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dense tokenization safety tests (finding 1: 1 char/token bound)
+//
+// These tests verify that with CHARS_PER_TOKEN = 1, even the most densely
+// tokenized text (CJK, code, JSON) cannot overflow the chunk or merge budget.
+// ---------------------------------------------------------------------------
+
+section("Dense tokenization — CJK text fits within chunk budget");
+{
+  // CJK characters are often 1 token per character in modern tokenizers.
+  // With CHARS_PER_TOKEN = 1, we budget as if every char is a token.
+  const cw = 200_000;
+  const budget = computeChunkCharBudget(cw);
+  const systemPromptTokens = Math.ceil(COMPACTION_SYSTEM_PROMPT_LEN / CHARS_PER_TOKEN);
+
+  // Simulate a chunk of CJK chars filling the entire budget
+  const cjkChunk = "あ".repeat(budget);
+  const estimatedChunkTokens = cjkChunk.length; // 1 char/token = budget tokens
+  const totalEstimated = systemPromptTokens + estimatedChunkTokens + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS;
+
+  assert(
+    totalEstimated <= cw,
+    `CJK chunk: total estimated tokens (${totalEstimated}) should fit in context (${cw})`
+  );
+  assert(
+    estimatedChunkTokens === budget,
+    `CJK chunk tokens (${estimatedChunkTokens}) should equal budget (${budget})`
+  );
+}
+
+section("Dense tokenization — code text fits within chunk budget");
+{
+  // Code has many special characters, short identifiers, and punctuation
+  // that tokenize densely (many tokens per character ratio is low).
+  const cw = 128_000;
+  const budget = computeChunkCharBudget(cw);
+  const systemPromptTokens = Math.ceil(COMPACTION_SYSTEM_PROMPT_LEN / CHARS_PER_TOKEN);
+
+  // Simulate a code-heavy chunk at budget size
+  const codeChunk = "const x=1;".repeat(Math.floor(budget / 10));
+  const estimatedChunkTokens = codeChunk.length; // 1 char/token worst case
+  const totalEstimated = systemPromptTokens + estimatedChunkTokens + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS;
+
+  assert(
+    totalEstimated <= cw,
+    `Code chunk: total estimated tokens (${totalEstimated}) should fit in context (${cw})`
+  );
+}
+
+section("Dense tokenization — JSON text fits within chunk budget");
+{
+  // JSON has braces, brackets, quotes, colons — dense tokenization.
+  const cw = 200_000;
+  const budget = computeChunkCharBudget(cw);
+  const systemPromptTokens = Math.ceil(COMPACTION_SYSTEM_PROMPT_LEN / CHARS_PER_TOKEN);
+
+  // Simulate JSON-heavy chunk at budget size
+  const jsonChunk = '{"k":"v"}'.repeat(Math.floor(budget / 10));
+  const estimatedChunkTokens = jsonChunk.length; // 1 char/token worst case
+  const totalEstimated = systemPromptTokens + estimatedChunkTokens + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS;
+
+  assert(
+    totalEstimated <= cw,
+    `JSON chunk: total estimated tokens (${totalEstimated}) should fit in context (${cw})`
+  );
+}
+
+section("Dense tokenization — mixed CJK + code + English fits within budget");
+{
+  // Real transcripts contain mixed content. With 1 char/token, even the
+  // worst case mix fits within the context window.
+  const cw = 200_000;
+  const budget = computeChunkCharBudget(cw);
+  const systemPromptTokens = Math.ceil(COMPACTION_SYSTEM_PROMPT_LEN / CHARS_PER_TOKEN);
+
+  // Build a mixed-content chunk at exactly the budget size
+  const segments = ["あいう".repeat(100), "const x=1;".repeat(100), "Hello world. ".repeat(100)];
+  let mixed = segments.join("\n");
+  // Truncate to exactly budget chars
+  if (mixed.length > budget) mixed = mixed.slice(0, budget);
+  else mixed = mixed + "x".repeat(budget - mixed.length);
+
+  const estimatedChunkTokens = mixed.length;
+  const totalEstimated = systemPromptTokens + estimatedChunkTokens + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS;
+
+  assert(
+    totalEstimated <= cw,
+    `Mixed chunk: total estimated tokens (${totalEstimated}) should fit in context (${cw})`
+  );
+  assert(mixed.length === budget, `Mixed chunk should be exactly budget size (${budget})`);
+}
+
+section("Dense tokenization — chunk budget invariants hold for all context windows");
+{
+  // For every usable context window, verify the core invariant:
+  //   systemPromptTokens + chunkTokens + outputTokens + safetyMargin <= contextWindow
+  // This is the no-overflow guarantee.
+  for (const cw of [20_000, 50_000, 128_000, 200_000, 500_000, 1_048_576, 1_050_000]) {
+    const budget = computeChunkCharBudget(cw);
+    const systemPromptTokens = Math.ceil(COMPACTION_SYSTEM_PROMPT_LEN / CHARS_PER_TOKEN);
+    const totalWorstCase = systemPromptTokens + budget + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS;
+    assert(
+      totalWorstCase <= cw,
+      `cw=${cw}: worst-case total (${totalWorstCase}) should be <= context window (${cw})`
     );
   }
 }
@@ -185,24 +308,89 @@ section("computeChunkCharBudget — output never exceeds safe usable context");
 section("computeMaxMergeChunks — 200k context");
 {
   const maxChunks = computeMaxMergeChunks(200_000);
-  // Available merge tokens = 200000 - ~200 - 2048 - 5000 = ~192752
-  // Max chunks = 192752 / 2048 = ~94
+  // Available merge tokens = 200000 - 649 - 2048 - 5000 = 192303
+  // Max chunks = 192303 / 2048 = 93
   assert(maxChunks >= 80, "200k should allow >=80 merge chunks");
   assert(maxChunks <= 100, "200k should allow <=100 merge chunks");
+  assert(maxChunks === 93, `200k should allow exactly 93 merge chunks, got ${maxChunks}`);
 }
 
 section("computeMaxMergeChunks — 1M context");
 {
   const maxChunks = computeMaxMergeChunks(1_048_576);
-  // Available = 1048576 - 200 - 2048 - 5000 = ~1041328
-  // Max chunks = 1041328 / 2048 = ~508
+  // Available = 1048576 - 649 - 2048 - 5000 = 1040879
+  // Max chunks = 1040879 / 2048 = 508
   assert(maxChunks >= 400, "1M should allow >=400 merge chunks");
+  assert(maxChunks === 508, `1M should allow exactly 508 merge chunks, got ${maxChunks}`);
 }
 
 section("computeMaxMergeChunks — tiny context throws");
 {
   assertThrows(() => computeMaxMergeChunks(1_000), "1k context merge should throw");
   assertThrows(() => computeMaxMergeChunks(5_000), "5k context merge should throw");
+}
+
+// ---------------------------------------------------------------------------
+// computeMergeInputCharBudget tests (finding 2: hierarchical merge budget)
+// ---------------------------------------------------------------------------
+
+section("computeMergeInputCharBudget — 200k context");
+{
+  const budget = computeMergeInputCharBudget(200_000);
+  // Merge system prompt 649 chars / 1 = 649 tokens
+  // Available = 200000 - 649 - 2048 - 5000 = 192303
+  // Char budget = 192303 * 1 = 192303
+  assertApprox(budget, 192_303, 100, "200k merge char budget → ~192k");
+  assert(budget > 180_000, "200k merge budget should be >180k chars");
+}
+
+section("computeMergeInputCharBudget — 1M context");
+{
+  const budget = computeMergeInputCharBudget(1_048_576);
+  // Available = 1048576 - 649 - 2048 - 5000 = 1040879
+  assertApprox(budget, 1_040_879, 100, "1M merge char budget → ~1.04M");
+  assert(budget > 1_000_000, "1M merge budget should be >1M chars");
+}
+
+section("computeMergeInputCharBudget — Terra 1.05M context");
+{
+  const budget = computeMergeInputCharBudget(1_050_000);
+  assert(budget > 1_000_000, "Terra merge budget should be >1M chars");
+  assert(budget < 1_050_000, "Terra merge budget should be <1.05M chars");
+}
+
+section("computeMergeInputCharBudget — tiny/invalid context throws");
+{
+  assertThrows(() => computeMergeInputCharBudget(0), "0 merge budget should throw");
+  assertThrows(() => computeMergeInputCharBudget(-100), "negative merge budget should throw");
+  assertThrows(() => computeMergeInputCharBudget(1_000), "1k merge budget should throw");
+  assertThrows(() => computeMergeInputCharBudget(5_000), "5k merge budget should throw");
+  assertThrows(() => computeMergeInputCharBudget(10_000), "10k merge budget should throw");
+}
+
+section("computeMergeInputCharBudget — never exceeds context window");
+{
+  // The merge input char budget should never exceed the context window itself
+  for (const cw of [20_000, 50_000, 128_000, 200_000, 1_050_000]) {
+    const budget = computeMergeInputCharBudget(cw);
+    assert(budget < cw, `merge budget ${budget} should be < context window ${cw}`);
+  }
+}
+
+section("computeMergeInputCharBudget — dense tokenization invariant");
+{
+  // With CHARS_PER_TOKEN = 1, the worst case is every char in the merge input
+  // is a separate token. Verify that even this worst case fits:
+  //   mergeSystemPromptTokens + mergeInputTokens + outputTokens + safety <= cw
+  for (const cw of [20_000, 128_000, 200_000, 1_050_000]) {
+    const budget = computeMergeInputCharBudget(cw);
+    const mergeSystemTokens = Math.ceil(PROGRESSIVE_MERGE_PROMPT_LEN / CHARS_PER_TOKEN);
+    const totalWorstCase = mergeSystemTokens + budget + MAX_SUMMARY_OUTPUT_TOKENS + SAFETY_MARGIN_TOKENS;
+    assert(
+      totalWorstCase <= cw,
+      `cw=${cw}: merge worst-case total (${totalWorstCase}) should be <= context window (${cw})`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
