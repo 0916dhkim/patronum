@@ -335,6 +335,11 @@ async function call(
     body.tool_choice = translateToolChoice(toolChoice);
   }
 
+  // Pin z-ai/glm-5.2 to z.ai servers with fp8 quantization
+  if (model === "z-ai/glm-5.2") {
+    body.provider = { order: ["z-ai"], quantizations: ["fp8"] };
+  }
+
   // Compose caller signal with timeout
   const timeoutSignal = AbortSignal.timeout(API_TIMEOUT_MS);
   const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
@@ -439,6 +444,11 @@ async function* stream(
 
   if (toolChoice) {
     body.tool_choice = translateToolChoice(toolChoice);
+  }
+
+  // Pin z-ai/glm-5.2 to z.ai servers with fp8 quantization
+  if (model === "z-ai/glm-5.2") {
+    body.provider = { order: ["z-ai"], quantizations: ["fp8"] };
   }
 
   // Compose caller signal with timeout
