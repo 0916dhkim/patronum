@@ -142,7 +142,8 @@ async function summarizeTranscript(transcript: string, isPartial: boolean): Prom
     { maxTokens: 2048 }
   );
 
-  return response.content.find((b) => b.type === "text")?.text ?? "(summary unavailable)";
+  const textBlock = response.content.find((b): b is { type: "text"; text: string; cache_control?: any } => b.type === "text");
+  return textBlock?.text ?? "(summary unavailable)";
 }
 
 /**
@@ -161,7 +162,8 @@ async function mergeChunkSummaries(chunkSummaries: string[]): Promise<string> {
     { maxTokens: 2048 }
   );
 
-  return response.content.find((b) => b.type === "text")?.text ?? "(merge unavailable)";
+  const textBlock = response.content.find((b): b is { type: "text"; text: string; cache_control?: any } => b.type === "text");
+  return textBlock?.text ?? "(merge unavailable)";
 }
 
 /**

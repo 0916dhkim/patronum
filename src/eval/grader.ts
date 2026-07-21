@@ -58,8 +58,8 @@ Then on a new line, explain your reasoning in 1-2 sentences.`;
       { maxTokens: 256 }
     );
 
-    const text =
-      response.content.find((b) => b.type === "text")?.text || "(no response)";
+    const textBlock = response.content.find((b): b is { type: "text"; text: string; cache_control?: any } => b.type === "text");
+    const text = textBlock?.text || "(no response)";
 
     // Parse the first line for the verdict
     const lines = text.split("\n").map((l) => l.trim());

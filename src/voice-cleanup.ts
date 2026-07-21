@@ -112,9 +112,8 @@ export async function cleanupVoiceTranscript(
       { maxTokens: 512 }
     );
 
-    const cleanedText = response.content
-      .find((b) => b.type === "text")
-      ?.text?.trim();
+    const textBlock = response.content.find((b): b is { type: "text"; text: string; cache_control?: any } => b.type === "text");
+    const cleanedText = textBlock?.text?.trim();
 
     if (!cleanedText) {
       console.warn(`[voice-cleanup] Empty response from Haiku, returning raw transcript`);
