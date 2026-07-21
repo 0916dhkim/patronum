@@ -34,14 +34,15 @@ export async function callLLM(
     maxTokens?: number;
     completedPrefixLength?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<ClaudeResponse> {
   const provider = getProvider(model);
 
   if (provider === "openrouter") {
-    return openrouterClient.call(messages, model, systemPrompt, tools, options, signal);
+    return openrouterClient.call(messages, model, systemPrompt, tools, options, signal, toolChoice);
   } else {
-    return anthropicClient.call(messages, model, systemPrompt, tools, options, signal);
+    return anthropicClient.call(messages, model, systemPrompt, tools, options, signal, toolChoice);
   }
 }
 
@@ -59,14 +60,15 @@ export async function callLLMStreaming(
     maxTokens?: number;
     completedPrefixLength?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<AsyncGenerator<StreamEvent>> {
   const provider = getProvider(model);
 
   if (provider === "openrouter") {
-    return openrouterClient.stream(messages, model, systemPrompt, tools, options, signal);
+    return openrouterClient.stream(messages, model, systemPrompt, tools, options, signal, toolChoice);
   } else {
-    return anthropicClient.stream(messages, model, systemPrompt, tools, options, signal);
+    return anthropicClient.stream(messages, model, systemPrompt, tools, options, signal, toolChoice);
   }
 }
 

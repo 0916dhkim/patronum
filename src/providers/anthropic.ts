@@ -76,7 +76,8 @@ async function call(
     maxTokens?: number;
     completedPrefixLength?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<ClaudeResponse> {
   const maxTokens = options?.maxTokens || 48000;
   const completedPrefixLength = options?.completedPrefixLength || 0;
@@ -91,6 +92,10 @@ async function call(
 
   if (options?.thinking) {
     body.thinking = { type: "enabled", budget_tokens: 32000 };
+  }
+
+  if (toolChoice) {
+    body.tool_choice = toolChoice;
   }
 
   // Remove undefined values
@@ -146,7 +151,8 @@ async function streamRaw(
     maxTokens?: number;
     completedPrefixLength?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<Response> {
   const maxTokens = options?.maxTokens || 48000;
   const completedPrefixLength = options?.completedPrefixLength || 0;
@@ -162,6 +168,10 @@ async function streamRaw(
 
   if (options?.thinking) {
     body.thinking = { type: "enabled", budget_tokens: 32000 };
+  }
+
+  if (toolChoice) {
+    body.tool_choice = toolChoice;
   }
 
   // Remove undefined values
@@ -265,9 +275,10 @@ async function* stream(
     maxTokens?: number;
     completedPrefixLength?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): AsyncGenerator<StreamEvent> {
-  const response = await streamRaw(messages, model, systemPrompt, tools, options, signal);
+  const response = await streamRaw(messages, model, systemPrompt, tools, options, signal, toolChoice);
   yield* parseSSEStream(response, signal);
 }
 

@@ -308,7 +308,8 @@ async function call(
     maxTokens?: number;
     completedPrefixLength?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): Promise<ClaudeResponse> {
   const maxTokens = options?.maxTokens || 48000;
 
@@ -328,6 +329,10 @@ async function call(
 
   if (translatedTools) {
     body.tools = translatedTools;
+  }
+
+  if (toolChoice) {
+    body.tool_choice = translateToolChoice(toolChoice);
   }
 
   // Compose caller signal with timeout
@@ -408,7 +413,8 @@ async function* stream(
     maxTokens?: number;
     completedPrefixLength?: number;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  toolChoice?: { type: "tool"; name: string } | { type: "auto" }
 ): AsyncGenerator<StreamEvent> {
   const maxTokens = options?.maxTokens || 48000;
 
@@ -429,6 +435,10 @@ async function* stream(
 
   if (translatedTools) {
     body.tools = translatedTools;
+  }
+
+  if (toolChoice) {
+    body.tool_choice = translateToolChoice(toolChoice);
   }
 
   // Compose caller signal with timeout
@@ -467,10 +477,13 @@ async function* stream(
   let buffer = "";
 
   let accumulatedText = "";
-  let accumulatedToolCalls: Array<{ id: string; function: { name: string; arguments: string } }> = [];
-  let toolCallArgumentsBuffer: Record<string, string> = {};
+  let textBlockStarted = false;
+  
+  // Track tool calls by index: index → { id, name, accumulatedArgs }
+  let toolCallsByIndex: Record<number, { id: string; name: string; accumulatedArgs: string }> = {};
+  let accumulatedToolCalls: Array<{ id: string; name: string }> = [];
+  
   let messageStartEmitted = false;
-  let inputTokens = 0;
 
   try {
     while (true) {
@@ -521,13 +534,14 @@ async function* stream(
           accumulatedText += delta.content;
 
           // Emit text content block start on first text delta
-          if (accumulatedText === delta.content) {
+          if (!textBlockStarted) {
             const blockStart: StreamEvent = {
               type: "content_block_start" as const,
               index: 0,
               content_block: { type: "text", text: "" },
             };
             yield blockStart;
+            textBlockStarted = true;
           }
 
           // Emit text delta
@@ -542,40 +556,53 @@ async function* stream(
         // Handle tool calls
         if (delta.tool_calls && delta.tool_calls.length > 0) {
           for (const toolCall of delta.tool_calls) {
-            const toolId = toolCall.id || `call_${Date.now()}`;
+            // Use index field (always present in tool_calls chunks)
+            const index = toolCall.index ?? 0;
 
-            // Start of new tool call
-            if (!toolCallArgumentsBuffer[toolId]) {
-              toolCallArgumentsBuffer[toolId] = "";
+            // First chunk for this tool call index has id and name
+            if (toolCall.id && toolCall.function?.name) {
+              toolCallsByIndex[index] = {
+                id: toolCall.id,
+                name: toolCall.function.name,
+                accumulatedArgs: "",
+              };
 
               // Emit tool_use content block start
               const blockStart: StreamEvent = {
                 type: "content_block_start" as const,
-                index: accumulatedToolCalls.length + 1,
+                index: (textBlockStarted ? 1 : 0) + accumulatedToolCalls.length,
                 content_block: {
                   type: "tool_use",
-                  id: toolId,
-                  name: (toolCall.function?.name as string) || "unknown",
+                  id: toolCall.id,
+                  name: toolCall.function.name,
                   input: {},
                 },
               };
               yield blockStart;
+
+              // Track this tool call
+              accumulatedToolCalls.push({ id: toolCall.id, name: toolCall.function.name });
             }
 
-            // Accumulate arguments
+            // Accumulate arguments (subsequent chunks only have index and partial arguments)
             if (toolCall.function?.arguments) {
-              toolCallArgumentsBuffer[toolId] += toolCall.function.arguments;
+              const toolCallData = toolCallsByIndex[index];
+              if (toolCallData) {
+                toolCallData.accumulatedArgs += toolCall.function.arguments;
 
-              // Emit input_json_delta
-              const argDelta: StreamEvent = {
-                type: "content_block_delta" as const,
-                index: accumulatedToolCalls.length + 1,
-                delta: {
-                  type: "input_json_delta",
-                  partial_json: toolCall.function.arguments,
-                },
-              };
-              yield argDelta;
+                // Emit input_json_delta
+                const argDelta: StreamEvent = {
+                  type: "content_block_delta" as const,
+                  index: (textBlockStarted ? 1 : 0) + accumulatedToolCalls.findIndex(
+                    (tc) => tc.id === toolCallData.id
+                  ),
+                  delta: {
+                    type: "input_json_delta",
+                    partial_json: toolCall.function.arguments,
+                  },
+                };
+                yield argDelta;
+              }
             }
           }
         }
@@ -583,7 +610,7 @@ async function* stream(
     }
 
     // Emit content_block_stop for text block if we had any
-    if (accumulatedText) {
+    if (textBlockStarted) {
       const blockStop: StreamEvent = {
         type: "content_block_stop" as const,
         index: 0,
@@ -591,18 +618,17 @@ async function* stream(
       yield blockStop;
     }
 
-    // Emit content_block_stop for each tool call and finalize them
-    for (let i = 0; i < Object.keys(toolCallArgumentsBuffer).length; i++) {
-      const toolId = Object.keys(toolCallArgumentsBuffer)[i];
+    // Emit content_block_stop for each tool call
+    for (let i = 0; i < accumulatedToolCalls.length; i++) {
       const blockStop: StreamEvent = {
         type: "content_block_stop" as const,
-        index: accumulatedText ? i + 1 : i,
+        index: (textBlockStarted ? 1 : 0) + i,
       };
       yield blockStop;
     }
 
     // Emit message_delta with stop_reason
-    const hasToolCalls = Object.keys(toolCallArgumentsBuffer).length > 0;
+    const hasToolCalls = accumulatedToolCalls.length > 0;
     const messageDelta: StreamEvent = {
       type: "message_delta" as const,
       delta: {

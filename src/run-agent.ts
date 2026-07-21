@@ -66,13 +66,6 @@ async function callClaudeForAgent(
     };
   }
 
-  // Note: toolChoice parameter is not yet supported by the provider layer.
-  // For now, we ignore it. This is fine for OpenRouter since it doesn't support
-  // forced tool_choice anyway. If needed later, we can extend the provider API.
-  if (toolChoice) {
-    console.warn(`[agent:${agent.name}] tool_choice not yet supported by provider layer, ignoring`);
-  }
-
   return callLLM(
     messages,
     agent.model,
@@ -82,7 +75,8 @@ async function callClaudeForAgent(
       thinking: agent.thinking && toolChoice?.type !== "tool",
       maxTokens: MAX_TOKENS,
     },
-    signal
+    signal,
+    toolChoice
   );
 }
 
