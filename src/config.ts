@@ -81,6 +81,35 @@ export async function initConfig(): Promise<void> {
   config.cogneeApiKey = typeof memory.cognee_api_key === "string" ? memory.cognee_api_key : "";
   config.shadowRead = memory.shadow_read === true;
   config.dualWrite = memory.dual_write === true;
+
+  // If cogneeApiKey is not set via patronum.toml, try Vaultwarden
+  if (!config.cogneeApiKey && config.vaultwardenUrl && config.vaultwardenEmail && config.vaultwardenMasterPassword) {
+    try {
+      // Use the vaultwarden tool to fetch the Cognee API key at startup
+      const { vaultwardenTool } = await import("./tools/vaultwarden.js");
+      const result = await vaultwardenTool.execute({ action: "get", query: "Cognee API Key Production" });
+      for (const line of result.split("\n")) {
+        const colonIdx = line.indexOf(": ");
+        if (colonIdx !== -1 && line.substring(0, colonIdx).trim().toLowerCase() === "password") {
+          const value = line.substring(colonIdx + 2).trim();
+          if (value) {
+            config.cogneeApiKey = value;
+            // Also export to environment for subprocesses (addWithMetadata Python wrapper)
+            process.env.COGNEE_API_KEY = value;
+          }
+          break;
+        }
+      }
+    } catch {
+      // Vaultwarden fetch failed — cogneeApiKey stays empty,
+      // and Cognee calls will fall back to SQLite gracefully
+    }
+  }
+
+  // Also check environment variable (set by Cognee service's vaultwarden_secrets.cjs)
+  if (!config.cogneeApiKey && process.env.COGNEE_API_KEY) {
+    config.cogneeApiKey = process.env.COGNEE_API_KEY;
+  }
 }
 
 function findWorkspace(): string {
