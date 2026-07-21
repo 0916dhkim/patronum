@@ -7,7 +7,8 @@ import type { ToolCallEntry } from "./interceptor.js";
 import { evaluateDeterministicAssertions, AssertionResult } from "./assertions.js";
 import { gradeAssertions, GradeResult } from "./grader.js";
 import { config } from "../config.js";
-import { prepareMessagesForClaude, prepareSystemPromptForClaude, logUsage, getTotalInputTokens } from "../prompt-cache.js";
+import { logUsage, getTotalInputTokens } from "../prompt-cache.js";
+import { callLLM } from "../providers/index.js";
 import type { Message, ToolUseBlock, ClaudeResponse, ContentBlock } from "../types.js";
 import type { PromptOverrides } from "../eval.js";
 
@@ -45,39 +46,20 @@ async function makeSingleClaudeCall(
   model: string,
   systemPrompt: Array<{ type: "text"; text: string }>
 ): Promise<{ content: ContentBlock[]; inputTokens: number }> {
-  const API_URL = "https://api.anthropic.com/v1/messages";
   const MAX_TOKENS = 8192;
 
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.claudeToken}`,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "user-agent": "claude-cli/2.1.85",
-      "x-app": "cli",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: MAX_TOKENS,
-      system: prepareSystemPromptForClaude(systemPrompt),
-      tools: getToolDefinitions(),
-      messages: prepareMessagesForClaude(messages),
-    }),
-  });
+  const response = await callLLM(
+    messages,
+    model,
+    systemPrompt,
+    getToolDefinitions(),
+    { maxTokens: MAX_TOKENS }
+  );
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Claude API error ${response.status}: ${body}`);
-  }
+  logUsage("lin", response.usage);
 
-  const data = (await response.json()) as ClaudeResponse;
-  logUsage("lin", data.usage);
-  
-  const inputTokens = getTotalInputTokens(data.usage);
-  return { content: data.content, inputTokens };
+  const inputTokens = getTotalInputTokens(response.usage);
+  return { content: response.content, inputTokens };
 }
 
 /**

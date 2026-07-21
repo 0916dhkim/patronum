@@ -1,6 +1,6 @@
 import path from "node:path";
 import { readdirSync, existsSync, readFileSync } from "node:fs";
-import { config } from "./config.js";
+import { config, getAgentOverrides } from "./config.js";
 
 export interface AgentDef {
   name: string;
@@ -87,11 +87,16 @@ function loadAgentFiles(): ParsedSubagent[] {
     // Parse thinking flag (frontmatter values are strings, treat "true" as truthy)
     const thinking = frontmatter.thinking === "true";
 
+    // Check for model override in config [agents.xxx]
+    const agentOverrides = getAgentOverrides();
+    const configModel = agentOverrides[name]?.model;
+    const model = configModel || frontmatter.model || config.claudeModel;
+
     parsed.push({
       sourcePath: subagentPath,
       definition: {
         name,
-        model: frontmatter.model || config.claudeModel,
+        model,
         workspaceDir: agentDir,
         description,
         systemPrompt: body,

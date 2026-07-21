@@ -6,6 +6,7 @@ export interface Config {
   telegramBotToken: string;
   claudeToken: string;
   claudeModel: string;
+  openrouterApiKey: string;
   workspace: string;
   ownerChatId: string;
   voyageApiKey: string;
@@ -21,6 +22,7 @@ export const config: Config = {
   telegramBotToken: "",
   claudeToken: "",
   claudeModel: "",
+  openrouterApiKey: "",
   workspace: "",
   ownerChatId: "",
   voyageApiKey: "",
@@ -45,6 +47,7 @@ export async function initConfig(): Promise<void> {
   config.telegramBotToken = getRequiredString(credentials, "credentials.telegram_bot_token", "telegram_bot_token", tomlPath);
   config.voyageApiKey = getOptionalString(credentials, "credentials.voyage_api_key", "voyage_api_key", tomlPath) ?? "";
   config.openaiApiKey = getOptionalString(credentials, "credentials.openai_api_key", "openai_api_key", tomlPath) ?? "";
+  config.openrouterApiKey = getOptionalString(credentials, "credentials.openrouter_api_key", "openrouter_api_key", tomlPath) ?? "";
 
   const vaultwarden = getOptionalTable(data, "vaultwarden", tomlPath) ?? {};
   config.vaultwardenUrl = getOptionalString(vaultwarden, "vaultwarden.url", "url", tomlPath) ?? "";

@@ -2,11 +2,8 @@ import { config } from "./config.js";
 import { getAgentDef, type AgentDef } from "./agents.js";
 import { getToolDefinitions, executeTool, setCurrentChatId, setSkillOverrides } from "./tools/index.js";
 import { buildSkillsSummary } from "./skills.js";
-import {
-  logUsage,
-  prepareMessagesForClaude,
-  prepareSystemPromptForClaude,
-} from "./prompt-cache.js";
+import { logUsage } from "./prompt-cache.js";
+import { callLLM } from "./providers/index.js";
 import { persistSubagentMessages } from "./agent-thread.js";
 import type {
   Message,
@@ -17,8 +14,6 @@ import type {
   TextBlock,
 } from "./types.js";
 
-
-const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 48000; // Must be greater than thinking budget_tokens (32000) + output capacity
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
@@ -71,47 +66,24 @@ async function callClaudeForAgent(
     };
   }
 
-  const body: Record<string, unknown> = {
-    model: agent.model,
-    max_tokens: MAX_TOKENS,
-    system: prepareSystemPromptForClaude(systemPrompt),
-    tools,
-    messages: prepareMessagesForClaude(messages),
-  };
-
-  // Add tool_choice if specified
+  // Note: toolChoice parameter is not yet supported by the provider layer.
+  // For now, we ignore it. This is fine for OpenRouter since it doesn't support
+  // forced tool_choice anyway. If needed later, we can extend the provider API.
   if (toolChoice) {
-    body.tool_choice = toolChoice;
+    console.warn(`[agent:${agent.name}] tool_choice not yet supported by provider layer, ignoring`);
   }
 
-  // Add thinking if enabled for this agent — but NOT when tool_choice forces a specific tool,
-  // as the Anthropic API does not allow thinking + forced tool_choice simultaneously.
-  if (agent.thinking && toolChoice?.type !== "tool") {
-    body.thinking = { type: "enabled", budget_tokens: 32000 };
-  }
-
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.claudeToken}`,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta":
-        "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "user-agent": "claude-cli/2.1.85",
-      "x-app": "cli",
-      "content-type": "application/json",
+  return callLLM(
+    messages,
+    agent.model,
+    systemPrompt,
+    tools,
+    {
+      thinking: agent.thinking && toolChoice?.type !== "tool",
+      maxTokens: MAX_TOKENS,
     },
-    body: JSON.stringify(body),
-    signal,
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Claude API error ${response.status} for agent ${agent.name}: ${body}`);
-  }
-
-  return (await response.json()) as ClaudeResponse;
+    signal
+  );
 }
 
 /**

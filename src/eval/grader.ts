@@ -1,4 +1,4 @@
-import { config } from "../config.js";
+import { callLLM } from "../providers/index.js";
 import { ToolCallEntry } from "./interceptor.js";
 
 export interface GradeResult {
@@ -50,44 +50,16 @@ PARTIAL — if it's ambiguous
 Then on a new line, explain your reasoning in 1-2 sentences.`;
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.claudeToken}`,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-        "content-type": "application/json",
-        "anthropic-dangerous-direct-browser-access": "true",
-        "user-agent": "claude-cli/2.1.85",
-        "x-app": "cli",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 256,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      return {
-        assertion,
-        verdict: "ERROR",
-        reasoning: `Grader API error ${response.status}: ${body.slice(0, 100)}`,
-      };
-    }
-
-    const data = (await response.json()) as {
-      content: Array<{ type: string; text: string }>;
-    };
+    const response = await callLLM(
+      [{ role: "user", content: prompt }],
+      "claude-haiku-4-5-20251001",
+      [],
+      [],
+      { maxTokens: 256 }
+    );
 
     const text =
-      data.content.find((b) => b.type === "text")?.text || "(no response)";
+      response.content.find((b) => b.type === "text")?.text || "(no response)";
 
     // Parse the first line for the verdict
     const lines = text.split("\n").map((l) => l.trim());

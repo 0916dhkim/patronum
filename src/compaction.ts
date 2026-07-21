@@ -1,8 +1,7 @@
 import { config } from "./config.js";
+import { callLLM, getContextWindow as getProviderContextWindow } from "./providers/index.js";
 import type { Message, ContentBlock } from "./types.js";
 
-const API_URL = "https://api.anthropic.com/v1/messages";
-const MODELS_API_URL = "https://api.anthropic.com/v1/models";
 const COMPACTION_MODEL = "claude-haiku-4-5-20251001";
 
 // Compaction triggers at 200k input tokens absolute threshold
@@ -56,57 +55,11 @@ Requirements:
 - Be concise but preserve all continuation-critical context.
 - Output only the merged markdown summary.`;
 
-// Cache: model id → context_window size
-const contextWindowCache = new Map<string, number>();
-
-// Fallback context windows for common models
-const FALLBACK_CONTEXT_WINDOWS: Record<string, number> = {
-  "claude-sonnet-4-6": 200_000,
-  "claude-opus-4-6": 200_000,
-  "claude-haiku-4-5-20251001": 200_000,
-  "claude-sonnet-4-20250514": 200_000,
-};
-
 /**
- * Fetch the context window size for a model from the Anthropic models API.
- * Caches results in memory.
+ * Fetch the context window size for a model using the provider abstraction.
  */
 export async function getContextWindow(model: string): Promise<number> {
-  const cached = contextWindowCache.get(model);
-  if (cached !== undefined) return cached;
-
-  try {
-    const response = await fetch(`${MODELS_API_URL}/${model}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${config.claudeToken}`,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "oauth-2025-04-20,claude-code-20250219",
-        "user-agent": "claude-cli/2.1.85",
-        "content-type": "application/json",
-      },
-    });
-
-    if (response.ok) {
-      const data = (await response.json()) as { context_window?: number; max_input_tokens?: number };
-      const contextWindow = data.context_window ?? data.max_input_tokens;
-      if (contextWindow) {
-        contextWindowCache.set(model, contextWindow);
-        console.log(`[compaction] Cached context window for ${model}: ${contextWindow}`);
-        return contextWindow;
-      }
-    } else {
-      console.warn(`[compaction] Models API returned ${response.status} for ${model}, using fallback`);
-    }
-  } catch (err) {
-    console.warn(`[compaction] Failed to fetch context window for ${model}:`, err);
-  }
-
-  // Fallback
-  const fallback = FALLBACK_CONTEXT_WINDOWS[model] ?? 200_000;
-  contextWindowCache.set(model, fallback);
-  console.log(`[compaction] Using fallback context window for ${model}: ${fallback}`);
-  return fallback;
+  return getProviderContextWindow(model);
 }
 
 /**
@@ -181,32 +134,15 @@ async function summarizeTranscript(transcript: string, isPartial: boolean): Prom
     ? `Summarize this portion of an earlier conversation transcript for future continuation:\n\n${transcript}`
     : `Summarize this earlier conversation transcript for future continuation:\n\n${transcript}`;
 
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.claudeToken}`,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "user-agent": "claude-cli/2.1.85",
-      "x-app": "cli",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: COMPACTION_MODEL,
-      max_tokens: 2048,
-      system: COMPACTION_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userContent }],
-    }),
-  });
+  const response = await callLLM(
+    [{ role: "user", content: userContent }],
+    COMPACTION_MODEL,
+    [{ type: "text", text: COMPACTION_SYSTEM_PROMPT }],
+    [],
+    { maxTokens: 2048 }
+  );
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Compaction API error ${response.status}: ${body}`);
-  }
-
-  const data = (await response.json()) as { content: Array<{ type: string; text: string }> };
-  return data.content.find((b) => b.type === "text")?.text ?? "(summary unavailable)";
+  return response.content.find((b) => b.type === "text")?.text ?? "(summary unavailable)";
 }
 
 /**
@@ -217,32 +153,15 @@ async function mergeChunkSummaries(chunkSummaries: string[]): Promise<string> {
     .map((s, i) => `### Chunk ${i + 1} Summary\n${s}`)
     .join("\n\n");
 
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.claudeToken}`,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "user-agent": "claude-cli/2.1.85",
-      "x-app": "cli",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: COMPACTION_MODEL,
-      max_tokens: 2048,
-      system: PROGRESSIVE_MERGE_PROMPT,
-      messages: [{ role: "user", content: `Merge these sequential conversation summaries:\n\n${merged}` }],
-    }),
-  });
+  const response = await callLLM(
+    [{ role: "user", content: `Merge these sequential conversation summaries:\n\n${merged}` }],
+    COMPACTION_MODEL,
+    [{ type: "text", text: PROGRESSIVE_MERGE_PROMPT }],
+    [],
+    { maxTokens: 2048 }
+  );
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Compaction merge API error ${response.status}: ${body}`);
-  }
-
-  const data = (await response.json()) as { content: Array<{ type: string; text: string }> };
-  return data.content.find((b) => b.type === "text")?.text ?? "(merge unavailable)";
+  return response.content.find((b) => b.type === "text")?.text ?? "(merge unavailable)";
 }
 
 /**

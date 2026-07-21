@@ -5,10 +5,9 @@
  * Implements cache-friendly prompt structure to maximize cost efficiency.
  */
 
-import { config } from "./config.js";
+import { callLLM } from "./providers/index.js";
 import type { Message } from "./types.js";
 
-const API_URL = "https://api.anthropic.com/v1/messages";
 const CLEANUP_MODEL = "claude-haiku-4-5-20251001";
 
 const VOICE_CLEANUP_SYSTEM_PROMPT = `You are a transcription cleanup assistant for voice messages in a developer productivity tool.
@@ -104,44 +103,16 @@ export async function cleanupVoiceTranscript(
       ? `${historyContext}\n\nRaw transcription to clean up:\n"${rawTranscript}"`
       : `Raw transcription to clean up:\n"${rawTranscript}"`;
 
-    // Call Haiku API
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.claudeToken}`,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-        "anthropic-dangerous-direct-browser-access": "true",
-        "user-agent": "claude-cli/2.1.85",
-        "x-app": "cli",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: CLEANUP_MODEL,
-        max_tokens: 512, // Short response expected
-        system: VOICE_CLEANUP_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: userMessageText,
-          },
-        ],
-      }),
-    });
+    // Call Haiku API using provider abstraction
+    const response = await callLLM(
+      [{ role: "user", content: userMessageText }],
+      CLEANUP_MODEL,
+      [{ type: "text", text: VOICE_CLEANUP_SYSTEM_PROMPT }],
+      [],
+      { maxTokens: 512 }
+    );
 
-    if (!response.ok) {
-      const body = await response.text();
-      const errorMsg = `Voice cleanup API error ${response.status}: ${body}`;
-      console.error(`[voice-cleanup] ${errorMsg}`);
-      // Fall back to raw transcript
-      return rawTranscript;
-    }
-
-    const data = (await response.json()) as {
-      content: Array<{ type: string; text: string }>;
-    };
-
-    const cleanedText = data.content
+    const cleanedText = response.content
       .find((b) => b.type === "text")
       ?.text?.trim();
 

@@ -4,12 +4,8 @@ import { getProjectContext } from "./project-context.js";
 import { getToolDefinitions, executeTool } from "./tools/index.js";
 import { buildSubagentsSummary } from "./agents.js";
 import { buildSkillsSummary, type SkillOverrides } from "./skills.js";
-import {
-  prepareMessagesForClaude,
-  prepareSystemPromptForClaude,
-  logUsage,
-  getTotalInputTokens,
-} from "./prompt-cache.js";
+import { logUsage, getTotalInputTokens } from "./prompt-cache.js";
+import { callLLM, callLLMStreaming } from "./providers/index.js";
 
 import type {
   Message,
@@ -23,9 +19,7 @@ import type {
   RedactedThinkingBlock,
 } from "./types.js";
 
-const API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_TOKENS = 48000; // Must be greater than thinking budget_tokens (32000) + output capacity
-const API_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes hard timeout on API calls
 
 // OAuth tokens require the Claude Code identity system prompt to access sonnet/opus models
 export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
@@ -97,53 +91,18 @@ async function callClaude(
   const model = options?.model || config.claudeModel;
   const systemPrompt = options?.systemPrompt || buildSystemPrompt(options);
 
-  const body: Record<string, unknown> = {
+  return callLLM(
+    messages,
     model,
-    max_tokens: MAX_TOKENS,
-    system: prepareSystemPromptForClaude(systemPrompt),
-    tools: getToolDefinitions(),
-    messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
-  };
-
-  if (options?.thinking) {
-    body.thinking = { type: "enabled", budget_tokens: 32000 };
-  }
-
-  // Compose caller signal with 30-minute timeout
-  const timeoutSignal = AbortSignal.timeout(API_TIMEOUT_MS);
-  const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-
-  try {
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.claudeToken}`,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-        "anthropic-dangerous-direct-browser-access": "true",
-        "user-agent": "claude-cli/2.1.85",
-        "x-app": "cli",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: fetchSignal,
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Claude API error ${response.status}: ${body}`);
-    }
-
-    return (await response.json()) as ClaudeResponse;
-  } catch (error) {
-    // Distinguish timeout errors from other failures
-    if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error(
-        `Claude API call timed out after ${API_TIMEOUT_MS / 1000 / 60} minutes — connection stalled`
-      );
-    }
-    throw error;
-  }
+    systemPrompt,
+    getToolDefinitions(),
+    {
+      thinking: options?.thinking,
+      maxTokens: MAX_TOKENS,
+      completedPrefixLength,
+    },
+    signal
+  );
 }
 
 async function callClaudeStreaming(
@@ -151,104 +110,22 @@ async function callClaudeStreaming(
   options?: AgentOptions,
   signal?: AbortSignal,
   completedPrefixLength = 0
-): Promise<Response> {
+): Promise<AsyncGenerator<StreamEvent>> {
   const model = options?.model || config.claudeModel;
   const systemPrompt = options?.systemPrompt || buildSystemPrompt(options);
 
-  const body: Record<string, unknown> = {
+  return callLLMStreaming(
+    messages,
     model,
-    max_tokens: MAX_TOKENS,
-    system: prepareSystemPromptForClaude(systemPrompt),
-    tools: getToolDefinitions(),
-    messages: prepareMessagesForClaude(messages, { completedPrefixLength }),
-    stream: true,
-  };
-
-  if (options?.thinking) {
-    body.thinking = { type: "enabled", budget_tokens: 32000 };
-  }
-
-  // Compose caller signal with 30-minute timeout
-  const timeoutSignal = AbortSignal.timeout(API_TIMEOUT_MS);
-  const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-
-  try {
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.claudeToken}`,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-        "anthropic-dangerous-direct-browser-access": "true",
-        "user-agent": "claude-cli/2.1.85",
-        "x-app": "cli",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: fetchSignal,
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Claude API error ${response.status}: ${body}`);
-    }
-
-    return response;
-  } catch (error) {
-    // Distinguish timeout errors from other failures
-    if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error(
-        `Claude API call timed out after ${API_TIMEOUT_MS / 1000 / 60} minutes — connection stalled`
-      );
-    }
-    throw error;
-  }
-}
-
-async function* parseSSEStream(
-  response: Response,
-  signal?: AbortSignal
-): AsyncGenerator<StreamEvent> {
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error("Task cancelled");
-
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      // SSE events are separated by double newlines
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop()!; // Keep the incomplete last part in the buffer
-
-      for (const part of parts) {
-        const lines = part.split("\n");
-        let eventData = "";
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            eventData += line.slice(6);
-          }
-        }
-
-        if (eventData && eventData.trim()) {
-          try {
-            const parsed = JSON.parse(eventData) as StreamEvent;
-            yield parsed;
-          } catch {
-            console.warn("[stream] Failed to parse SSE event:", eventData.slice(0, 200));
-          }
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+    systemPrompt,
+    getToolDefinitions(),
+    {
+      thinking: options?.thinking,
+      maxTokens: MAX_TOKENS,
+      completedPrefixLength,
+    },
+    signal
+  );
 }
 
 export interface AgentResult {
@@ -298,7 +175,7 @@ export async function runAgentStreaming(
     try {
       if (signal?.aborted) throw new TaskCancelledError("Task cancelled", newMessages);
 
-      const response = await callClaudeStreaming(conversation, options, signal, initialLength);
+      const eventStream = await callClaudeStreaming(conversation, options, signal, initialLength);
 
       // Track accumulated content blocks in original order
       const contentBlocks: ContentBlock[] = [];
@@ -314,7 +191,7 @@ export async function runAgentStreaming(
       let currentRedactedThinkingData = "";
 
       // Parse the SSE stream
-      for await (const event of parseSSEStream(response, signal)) {
+      for await (const event of eventStream) {
         if (event.type === "message_start") {
           lastInputTokens = getTotalInputTokens(event.message.usage) || lastInputTokens;
           logUsage("lin", event.message.usage);
