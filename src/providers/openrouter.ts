@@ -36,7 +36,12 @@ function buildProviderObject(modelId: string): Record<string, unknown> | undefin
   if (!routing) return undefined;
 
   const provider: Record<string, unknown> = {};
-  if (routing.providerOrder) provider.order = routing.providerOrder;
+  // sort and order are mutually exclusive — sort takes precedence
+  if (routing.sort) {
+    provider.sort = routing.sort;
+  } else if (routing.providerOrder) {
+    provider.order = routing.providerOrder;
+  }
   if (routing.quantizations) provider.quantizations = routing.quantizations;
   if (routing.allowFallbacks !== undefined) provider.allow_fallbacks = routing.allowFallbacks;
 

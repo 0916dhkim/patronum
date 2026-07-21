@@ -179,6 +179,7 @@ export interface ModelRoutingConfig {
   providerOrder?: string[];
   quantizations?: string[];
   allowFallbacks?: boolean;
+  sort?: string;
 }
 
 /**
@@ -225,6 +226,16 @@ export function getModelRoutingConfig(modelId: string): ModelRoutingConfig | und
       );
     }
     routing.allowFallbacks = value;
+  }
+
+  if ("sort" in modelEntry) {
+    const value = modelEntry.sort;
+    if (typeof value !== "string") {
+      throw new Error(
+        `Invalid config at models."${modelId}".sort in ${tomlPath}: expected string`,
+      );
+    }
+    routing.sort = value;
   }
 
   return routing;
