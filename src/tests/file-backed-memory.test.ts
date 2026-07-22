@@ -180,12 +180,11 @@ describe("File-backed shared memory", () => {
   });
 
   describe("Cognee tools and dual-write preserved", () => {
-    it("should export memorySearchTool and memoryFetchContextTool", async () => {
-      const { memorySearchTool, memoryFetchContextTool } = await import("../memory/index.js");
-      assert.ok(memorySearchTool, "memorySearchTool should be exported");
-      assert.ok(memoryFetchContextTool, "memoryFetchContextTool should be exported");
-      assert.equal(memorySearchTool.definition.name, "memory_search");
-      assert.equal(memoryFetchContextTool.definition.name, "memory_fetch_context");
+    it("should export memorySearchTool but not the removed memoryFetchContextTool", async () => {
+      const memory = await import("../memory/index.js");
+      assert.ok(memory.memorySearchTool, "memorySearchTool should be exported");
+      assert.equal(memory.memorySearchTool.definition.name, "memory_search");
+      assert.ok(!("memoryFetchContextTool" in memory), "memoryFetchContextTool should not be exported");
     });
 
     it("should export indexExchange for dual-write", async () => {
@@ -203,12 +202,12 @@ describe("File-backed shared memory", () => {
       assert.ok(!toolNames.includes("living_memory_update"), "living_memory_update should not be in registered tools");
     });
 
-    it("should still have memory_search and memory_fetch_context tools", async () => {
+    it("should retain memory_search and remove memory_fetch_context", async () => {
       const { getToolDefinitions } = await import("../tools/index.js");
       const tools = getToolDefinitions();
       const toolNames = tools.map((t) => t.name);
       assert.ok(toolNames.includes("memory_search"), "memory_search should still be registered");
-      assert.ok(toolNames.includes("memory_fetch_context"), "memory_fetch_context should still be registered");
+      assert.ok(!toolNames.includes("memory_fetch_context"), "memory_fetch_context should not be registered");
     });
   });
 
