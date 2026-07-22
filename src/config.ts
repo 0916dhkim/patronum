@@ -99,7 +99,7 @@ export async function initConfig(): Promise<void> {
     try {
       // Use the vaultwarden tool to fetch the Cognee API key at startup
       const { vaultwardenTool } = await import("./tools/vaultwarden.js");
-      const result = await vaultwardenTool.execute({ action: "get", query: "Cognee API Key Production" });
+      const result = await vaultwardenTool.execute({ action: "get", query: "Cognee API Key (Current)" });
       for (const line of result.split("\n")) {
         const colonIdx = line.indexOf(": ");
         if (colonIdx !== -1 && line.substring(0, colonIdx).trim().toLowerCase() === "password") {

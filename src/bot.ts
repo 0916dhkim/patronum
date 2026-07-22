@@ -170,7 +170,7 @@ export async function startBot(): Promise<void> {
   // Fetch Cognee API key from Vaultwarden at startup — runtime only, no disk persistence
   if (config.vaultwardenUrl) {
     try {
-      const result = await vaultwardenTool.execute({ action: "get", query: "Cognee API Key Production" });
+      const result = await vaultwardenTool.execute({ action: "get", query: "Cognee API Key (Current)" });
       // Parse the result to extract the password field
       for (const line of result.split("\n")) {
         const colonIdx = line.indexOf(": ");
