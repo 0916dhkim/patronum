@@ -11,7 +11,7 @@ import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
 import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
 import { taskManager } from "./task-manager.js";
-import { initEmbeddings, initMemoryStore, initMigrationLedger, autoRecall, indexExchange, getChunkCount } from "./memory/index.js";
+import { initEmbeddings, initMemoryStore, initMigrationLedger, autoRecall, indexExchange, getChunkCount, migrateLivingMemory, renderLivingMemory, refreshLivingMemory } from "./memory/index.js";
 import { vaultwardenTool } from "./tools/vaultwarden.js";
 import { stripThinkingBlocks } from "./prompt-cache.js";
 import { transcribeAudio } from "./whisper.js";
@@ -148,6 +148,15 @@ export async function startBot(): Promise<void> {
     console.log(`[patronum] Memory system initialized (${getChunkCount()} chunks indexed)`);
   } else {
     console.warn("[patronum] VOYAGE_API_KEY not set — memory system disabled");
+  }
+
+  // Initialize Living Memory schema (always runs — tables are idempotent)
+  try {
+    migrateLivingMemory();
+    console.log(`[patronum] Living Memory schema initialized (mode: ${config.livingMemory})`);
+  } catch (err) {
+    // Non-fatal — Living Memory is a soft feature
+    console.warn("[patronum] Living Memory init failed (non-fatal):", err);
   }
 
   // Initialize migration ledger for Cognee backfill tracking
@@ -868,69 +877,87 @@ async function handleEvent(
   // Load session history
   const history = loadHistory(chatId);
 
+  // Extra context blocks to inject into the system prompt (not user message content)
+  const extraContext: string[] = [];
+
   // For user messages (text, voice, or photo), add to session history
   if (event.type === "user_message") {
-    // Auto-recall: try to retrieve relevant memory context
-    let recallContent: string | null = null;
-    if (config.voyageApiKey) {
-      recallContent = await autoRecall(event.text);
-    }
-
-    let messageContent = event.text;
-    if (recallContent) {
-      // Augment the message with memory context
-      messageContent = `${event.text}
-
-<memory_context>
-Automatically retrieved memory fragments that may be relevant to this message.
-These are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.
-
-${recallContent}
-</memory_context>`;
-    }
-
-    // Push augmented version to history (in-memory for this turn)
-    const userMessage: Message = { role: "user", content: messageContent };
+    // Push original user message to history (no augmentation — context goes in system prompt)
+    const userMessage: Message = { role: "user", content: event.text };
     history.push(userMessage);
 
-    // Save original text to DB (not augmented)
+    // Save original text to DB
     const storageMessage: Message = { role: "user", content: event.text };
     saveMessage(chatId, storageMessage, event.ctx.message?.message_id);
+
+    // Build extra context for system prompt (Living Memory, shadow recall, legacy recall)
+    if (config.livingMemory) {
+      // Living Memory path: structured context added to system prompt via extraContext
+      const lmContent = renderLivingMemory(chatId);
+      if (lmContent) {
+        extraContext.push(lmContent);
+      }
+
+      // In shadow mode, also append Cognee recall as a shadow block
+      if (config.livingMemory === "shadow" && config.voyageApiKey) {
+        try {
+          const recallContent = await autoRecall(event.text);
+          if (recallContent) {
+            extraContext.push(`<cognee_shadow>\n${recallContent}\n</cognee_shadow>`);
+          }
+        } catch (err) {
+          console.error(`[bot] Shadow recall failed:`, err);
+        }
+      }
+    } else if (config.voyageApiKey) {
+      // Legacy auto-recall path (unchanged — injected into user message content)
+      const recallContent = await autoRecall(event.text);
+      if (recallContent) {
+        const augmentedContent = `${event.text}\n\n<memory_context>\nAutomatically retrieved memory fragments that may be relevant to this message.\nThese are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.\n\n${recallContent}\n</memory_context>`;
+        // Replace the already-pushed message with the augmented version
+        history[history.length - 1] = { role: "user", content: augmentedContent };
+      }
+    }
   } else if (event.type === "user_voice") {
     // Voice message transcription — process like text message
-    let recallContent: string | null = null;
-    if (config.voyageApiKey) {
-      recallContent = await autoRecall(event.text);
-    }
-
-    let messageContent = event.text;
-    if (recallContent) {
-      // Augment the message with memory context
-      messageContent = `${event.text}
-
-<memory_context>
-Automatically retrieved memory fragments that may be relevant to this message.
-These are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.
-
-${recallContent}
-</memory_context>`;
-    }
-
-    // Push augmented version to history (in-memory for this turn)
-    const userMessage: Message = { role: "user", content: messageContent };
+    // Push original user message to history (no augmentation)
+    const userMessage: Message = { role: "user", content: event.text };
     history.push(userMessage);
 
     // Save to DB
     const storageMessage: Message = { role: "user", content: event.text };
     saveMessage(chatId, storageMessage, event.ctx.message?.message_id);
-  } else if (event.type === "user_photo") {
-    // Auto-recall: try to retrieve relevant memory context
-    let recallContent: string | null = null;
-    if (config.voyageApiKey) {
-      recallContent = await autoRecall(event.caption);
-    }
 
-    // Build vision message with image + caption for Claude
+    // Build extra context for system prompt
+    if (config.livingMemory) {
+      // Living Memory path
+      const lmContent = renderLivingMemory(chatId);
+      if (lmContent) {
+        extraContext.push(lmContent);
+      }
+
+      // In shadow mode, also append Cognee recall
+      if (config.livingMemory === "shadow" && config.voyageApiKey) {
+        try {
+          const recallContent = await autoRecall(event.text);
+          if (recallContent) {
+            extraContext.push(`<cognee_shadow>\n${recallContent}\n</cognee_shadow>`);
+          }
+        } catch (err) {
+          console.error(`[bot] Shadow recall failed:`, err);
+        }
+      }
+    } else if (config.voyageApiKey) {
+      // Legacy auto-recall path (unchanged — injected into user message content)
+      const recallContent = await autoRecall(event.text);
+      if (recallContent) {
+        const augmentedContent = `${event.text}\n\n<memory_context>\nAutomatically retrieved memory fragments that may be relevant to this message.\nThese are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.\n\n${recallContent}\n</memory_context>`;
+        // Replace the already-pushed message with the augmented version
+        history[history.length - 1] = { role: "user", content: augmentedContent };
+      }
+    }
+  } else if (event.type === "user_photo") {
+    // Build vision message with image + caption for Claude (no Living Memory in content)
     const contentArray: any[] = [
       {
         type: "image",
@@ -946,29 +973,52 @@ ${recallContent}
       },
     ];
 
-    // If recall returned content, add it as an additional text block
-    if (recallContent) {
-      contentArray.push({
-        type: "text",
-        text: `<memory_context>
-Automatically retrieved memory fragments that may be relevant to this message.
-These are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.
-
-${recallContent}
-</memory_context>`,
-      });
-    }
-
     const visionMessage: Message = {
       role: "user",
       content: contentArray,
     };
-    // Push full vision message (with image and optional recall) to in-memory history for this turn
+    // Push vision message (image + caption only) to in-memory history
     history.push(visionMessage);
 
-    // Save only caption text to SQLite — don't persist image bytes or recall context
+    // Save only caption text to SQLite — don't persist image bytes
     const storageMessage: Message = { role: "user", content: event.caption };
     saveMessage(chatId, storageMessage, event.ctx.message?.message_id);
+
+    // Build extra context for system prompt
+    if (config.livingMemory) {
+      // Living Memory path
+      const lmContent = renderLivingMemory(chatId);
+      if (lmContent) {
+        extraContext.push(lmContent);
+      }
+
+      // In shadow mode, also append Cognee recall
+      if (config.livingMemory === "shadow" && config.voyageApiKey) {
+        try {
+          const recallContent = await autoRecall(event.caption);
+          if (recallContent) {
+            extraContext.push(`<cognee_shadow>\n${recallContent}\n</cognee_shadow>`);
+          }
+        } catch (err) {
+          console.error(`[bot] Shadow recall failed:`, err);
+        }
+      }
+    } else if (config.voyageApiKey) {
+      // Legacy auto-recall path (unchanged — injected into user message content)
+      try {
+        const recallContent = await autoRecall(event.caption);
+        if (recallContent) {
+          contentArray.push({
+            type: "text",
+            text: `<memory_context>\nAutomatically retrieved memory fragments that may be relevant to this message.\nThese are background reference only — do not respond to or reference them directly unless they are clearly relevant to what the user is asking. Many may be irrelevant noise.\n\n${recallContent}\n</memory_context>`,
+          });
+          // Replace the already-pushed message with the augmented version
+          history[history.length - 1] = { role: "user", content: [...contentArray] };
+        }
+      } catch (err) {
+        console.error(`[bot] Auto-recall failed:`, err);
+      }
+    }
   } else {
     // For agent events, inject a synthetic user message so Lin can respond
     let systemText: string;
@@ -1027,7 +1077,7 @@ ${recallContent}
         model,
         workspace: config.workspace,
         thinking: true,
-        // extraContext is no longer used — thread context arrives via tool, not system prompt
+        extraContext: extraContext.length > 0 ? extraContext : undefined,
       },
       streamController.signal
     );
@@ -1148,6 +1198,20 @@ ${recallContent}
         }
         indexExchange(chatId, exchangeText, newMessages).catch((err) => {
           console.error(`[bot] Failed to index exchange:`, err);
+        });
+      }
+
+      // Post-turn: Living Memory refresh (fire-and-forget, only when Living Memory is active)
+      if (config.livingMemory && (event.type === "user_message" || event.type === "user_voice" || event.type === "user_photo")) {
+        const assistantText = extractTextFromResponse(newMessages);
+        let exchangeText = "";
+        if (event.type === "user_message" || event.type === "user_voice") {
+          exchangeText = event.text;
+        } else {
+          exchangeText = event.caption;
+        }
+        refreshLivingMemory(chatId, exchangeText, assistantText, false).catch((err) => {
+          console.error(`[bot] Living Memory refresh failed:`, err);
         });
       }
 

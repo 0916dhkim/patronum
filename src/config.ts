@@ -22,6 +22,8 @@ export interface Config {
   cogneeApiKey: string;         // from Vaultwarden or patronum.toml
   shadowRead: boolean;          // Phase 2b: log Cognee+SQLite comparison
   dualWrite: boolean;           // Phase 2c: write to both backends
+  // Living Memory: replaces Cognee auto-recall injection with structured context
+  livingMemory: boolean | "shadow"; // false (disabled), "shadow" (both), true (Living Memory primary)
 }
 
 // Mutable config — populated by initConfig() before use
@@ -44,6 +46,7 @@ export const config: Config = {
   cogneeApiKey: "",
   shadowRead: false,
   dualWrite: false,
+  livingMemory: false,
 };
 
 export async function initConfig(): Promise<void> {
@@ -81,6 +84,15 @@ export async function initConfig(): Promise<void> {
   config.cogneeApiKey = typeof memory.cognee_api_key === "string" ? memory.cognee_api_key : "";
   config.shadowRead = memory.shadow_read === true;
   config.dualWrite = memory.dual_write === true;
+
+  // Living Memory: tri-state flag (false / "shadow" / true)
+  if (memory.living_memory === true) {
+    config.livingMemory = true;
+  } else if (memory.living_memory === "shadow") {
+    config.livingMemory = "shadow";
+  } else {
+    config.livingMemory = false;
+  }
 
   // If cogneeApiKey is not set via patronum.toml, try Vaultwarden
   if (!config.cogneeApiKey && config.vaultwardenUrl && config.vaultwardenEmail && config.vaultwardenMasterPassword) {

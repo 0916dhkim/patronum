@@ -14,6 +14,7 @@ import { vaultwardenTool } from "./vaultwarden.js";
 import { readAgentThreadTool, listAgentThreadsTool } from "./agent-thread-tools.js";
 import { runEvalTool } from "./run-eval.js";
 import { loadSkillTool, setSkillOverrides } from "./load-skill.js";
+import { livingMemoryUpdateTool } from "./living-memory.js";
 
 export { setCurrentChatId, getCurrentChatId } from "./chat-context.js";
 export { setBot, setSendMediaChatId };
@@ -38,6 +39,7 @@ const tools: ToolHandler[] = [
   listAgentThreadsTool,
   runEvalTool,
   loadSkillTool,
+  livingMemoryUpdateTool,
 ];
 
 const toolMap = new Map<string, ToolHandler>(

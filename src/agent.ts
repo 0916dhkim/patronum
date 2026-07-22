@@ -74,7 +74,7 @@ export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text";
   const skillsSummary = buildSkillsSummary(options?.skillOverrides);
   if (skillsSummary) system.push({ type: "text", text: skillsSummary });
 
-  // Append any extra context (reserved for future use — currently unused)
+  // Append any extra context blocks (used by Living Memory, Cognee shadow recall)
   if (options?.extraContext) {
     for (const ctx of options.extraContext) {
       if (ctx) system.push({ type: "text", text: ctx });

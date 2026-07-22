@@ -95,6 +95,17 @@ export function initMemoryStore(): void {
 }
 
 /**
+ * Run the Living Memory schema migration (tables created if not exist).
+ * Called separately from initMemoryStore() so Living Memory works even
+ * when the vector memory system is not initialized (no Voyage API key).
+ */
+export function initLivingMemoryStore(): void {
+  // Import dynamically to avoid circular dependency
+  const { migrateLivingMemory } = require("./living.js");
+  migrateLivingMemory();
+}
+
+/**
  * Store a chunk with its embedding.
  */
 export function storeChunk(
