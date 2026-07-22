@@ -85,21 +85,16 @@ export async function health(): Promise<boolean> {
 }
 
 /**
- * Recall — semantic search against Cognee.
- * Returns raw results from Cognee REST API.
+ * Recall — high-level semantic search against Cognee.
+ * Uses minimal request body { query, datasets } — Cognee selects the
+ * optimal retrieval strategy (graph, vector, hybrid) automatically.
+ *
+ * Returns raw structured results from Cognee REST API, preserving
+ * kind, metadata, data_id, and all provenance fields.
  */
 export async function recall(
-  query: string,
-  options?: {
-    topK?: number;
-    searchType?: string;
-    onlyContext?: boolean;
-  }
+  query: string
 ): Promise<CogneeRecallResult[]> {
-  const topK = options?.topK ?? 6;
-  const searchType = options?.searchType ?? "CHUNKS";
-  const onlyContext = options?.onlyContext ?? true;
-
   const r = await fetch(`${COGNEE_BASE_URL}/api/v1/recall`, {
     method: "POST",
     headers: {
@@ -108,9 +103,6 @@ export async function recall(
     },
     body: JSON.stringify({
       query,
-      search_type: searchType,
-      only_context: onlyContext,
-      top_k: topK,
       datasets: [DATASET_NAME],
     }),
     signal: AbortSignal.timeout(TIMEOUT_RECALL),
@@ -131,12 +123,42 @@ export async function recall(
 
 /**
  * Format recall results into a context string for the LLM.
+ * Preserves kind/provenance/data_id when present in Cognee response.
  */
 export function formatRecallResults(results: CogneeRecallResult[]): string {
   if (results.length === 0) return "";
 
   return results
-    .map((r, i) => `[${i + 1}] ${r.text}`)
+    .map((r, i) => {
+      const parts: string[] = [];
+
+      // Kind tag — Cognee returns "chunk", "graph", "summary", etc.
+      if (r.kind) {
+        parts.push(`(kind: ${r.kind})`);
+      }
+
+      // Data_id for provenance lookup
+      if (r.metadata?.data_id) {
+        parts.push(`data_id: ${r.metadata.data_id}`);
+      }
+
+      // Document/chunk info if available
+      if (r.metadata?.document_name) {
+        parts.push(`document: ${r.metadata.document_name}`);
+      }
+      if (r.metadata?.chunk_index !== undefined) {
+        parts.push(`chunk_index: ${r.metadata.chunk_index}`);
+      }
+
+      // Score if present
+      if (r.score !== null && r.score !== undefined) {
+        parts.push(`score: ${r.score.toFixed(4)}`);
+      }
+
+      const header = parts.length > 0 ? `[${i + 1}] ${parts.join(" | ")}\n` : `[${i + 1}] `;
+      const text = r.text || r.metadata?.text || "";
+      return `${header}${text}`;
+    })
     .join("\n\n---\n\n");
 }
 

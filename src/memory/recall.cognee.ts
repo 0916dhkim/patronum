@@ -29,11 +29,9 @@ export async function autoRecall(userText: string): Promise<string | null> {
       const cogneeUp = await health();
       if (cogneeUp && (backend === "cognee" || shadowRead())) {
         try {
-          const results = await recall(userText, {
-            topK: AUTO_RECALL_TOP_K,
-            searchType: "CHUNKS",
-            onlyContext: true,
-          });
+          // High-level recall: minimal { query, datasets } request body.
+          // No forced search_type/only_context/top_k — Cognee chooses strategy.
+          const results = await recall(userText);
 
           if (results.length > 0) {
             const formatted = formatRecallResults(results);

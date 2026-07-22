@@ -55,47 +55,31 @@ export const memorySearchTool: ToolHandler = {
     const afterDate = input.after_date as string | undefined;
     const beforeDate = input.before_date as string | undefined;
 
-    // Cognee path
+    // Cognee path — high-level recall (Cognee selects optimal retrieval strategy)
     if (memoryBackend() === "cognee") {
       const up = await cogneeHealth();
       if (up) {
         try {
-          const results = await recall(query, {
-            topK,
-            searchType: "CHUNKS",
-            onlyContext: true,
-          });
+          // High-level recall: minimal { query, datasets } request body.
+          // No forced search_type/only_context/top_k — Cognee chooses strategy.
+          const results = await recall(query);
 
           if (results.length === 0) {
             return `No relevant memories found for: "${query}"`;
           }
 
-          // Client-side filtering (Cognee doesn't support date/chat_id filters in REST API)
-          let filtered = results;
+          // Client-side filtering note (Cognee REST API does not support date/chat_id filters)
           if (chatId || afterDate || beforeDate) {
-            // Apply post-retrieval filtering with explicit disclosure
             const filterNotes: string[] = [];
             if (chatId) filterNotes.push(`chat_id="${chatId}"`);
             if (afterDate) filterNotes.push(`after=${afterDate}`);
             if (beforeDate) filterNotes.push(`before=${beforeDate}`);
-
-            // NOTE: Results shown are pre-filter; full metadata-based filtering
-            // requires external_metadata DB lookup via Cognee SQLite.
-            // Until that is implemented, all results are returned regardless of
-            // chat_id/date filters, and the caller is warned.
             const filterDesc = filterNotes.join(", ");
-            const formatted = results
-              .map((r, i) => `[${i + 1}] ${r.text}`)
-              .join("\n\n---\n\n");
 
-            return `Found ${results.length} relevant memories (WARNING: filter ${filterDesc} not applied — Cognee backend does not support client-side filtering yet):\n\n${formatted}`;
+            return `Found ${results.length} relevant memories (WARNING: filter ${filterDesc} not applied — Cognee backend does not support client-side filtering yet):\n\n${formatRecallResults(results)}`;
           }
 
-          const formatted = results
-            .map((r, i) => `[${i + 1}] ${r.text}`)
-            .join("\n\n---\n\n");
-
-          return `Found ${results.length} relevant memories:\n\n${formatted}`;
+          return `Found ${results.length} relevant memories:\n\n${formatRecallResults(results)}`;
         } catch (err) {
           console.error("[memory_search] Cognee search failed, falling back:", err);
           // Fall through to SQLite
