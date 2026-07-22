@@ -1,5 +1,5 @@
 /**
- * Cognee integration tests (G1–G9).
+ * Cognee integration tests (G1–G10).
  * Runs with: npx tsx src/memory/cognee.test.ts
  *
  * Tests Cognee client health, recall (high-level), add, cognify, auth, fallback,
@@ -233,9 +233,70 @@ async function main() {
     assert.equal(fullResult.raw?.some_field, "value");
   });
 
+  // ===== G10: Timeout safety =====
+  const ROOT = "/var/lib/patronum/source/src/memory";
+
+  await run("G10a: TIMEOUT_RECALL is >= 25s for LLM-based graph completion", async () => {
+    const fs = await import("node:fs");
+    const source = fs.readFileSync(`${ROOT}/cognee_client.ts`, "utf-8");
+    const match = source.match(/TIMEOUT_RECALL\s*=\s*(\d[\d_]*)/);
+    assert.ok(match !== null, "TIMEOUT_RECALL constant must be defined");
+    const value = parseInt(match[1].replace(/_/g, ""), 10);
+    assert.ok(value >= 25_000, `TIMEOUT_RECALL=${value}ms is too low for LLM graph completion; need >= 25000ms`);
+    assert.ok(value <= 60_000, `TIMEOUT_RECALL=${value}ms is too high; must be bounded to prevent indefinite blocking`);
+  });
+
+  await run("G10b: recall() uses AbortSignal.timeout with TIMEOUT_RECALL", async () => {
+    const fs = await import("node:fs");
+    const source = fs.readFileSync(`${ROOT}/cognee_client.ts`, "utf-8");
+    const recallIdx = source.indexOf("export async function recall(");
+    assert.ok(recallIdx >= 0, "recall() function definition must exist");
+    const recallFnBlock = source.slice(recallIdx, recallIdx + 800);
+    assert.ok(
+      recallFnBlock.includes("AbortSignal.timeout(TIMEOUT_RECALL)"),
+      "recall() must use AbortSignal.timeout(TIMEOUT_RECALL) in fetch signal"
+    );
+  });
+
+  await run("G10c: recall() timeout error is caught and falls back to SQLite", async () => {
+    const fs = await import("node:fs");
+    const source = fs.readFileSync(`${ROOT}/recall.cognee.ts`, "utf-8");
+    assert.ok(source.includes("catch (err)"), "recall.cognee.ts must wrap recall() in try-catch");
+    assert.ok(
+      source.includes("falling back to SQLite"),
+      "recall.cognee.ts must log fallback message"
+    );
+    const sqlitePattern = /catch\s*\(err\)[\s\S]{0,500}SQLite/i;
+    assert.ok(
+      sqlitePattern.test(source),
+      "recall.cognee.ts must have SQLite fallback after Cognee error"
+    );
+  });
+
+  await run("G10d: memorySearchTool in tools.cognee.ts also catches Cognee errors", async () => {
+    const fs = await import("node:fs");
+    const source = fs.readFileSync(`${ROOT}/tools.cognee.ts`, "utf-8");
+    assert.ok(source.includes("catch (err)"), "tools.cognee.ts must wrap recall() in try-catch");
+    assert.ok(
+      source.includes("falling back"),
+      "tools.cognee.ts must log fallback message"
+    );
+  });
+
+  await run("G10e: Request body preserves simple high-level format (no CHUNKS)", async () => {
+    const fs = await import("node:fs");
+    const source = fs.readFileSync(`${ROOT}/cognee_client.ts`, "utf-8");
+    const bodyMatch = source.match(/JSON\.stringify\(\{[\s\S]{0,200}query[\s\S]{0,200}datasets/);
+    assert.ok(bodyMatch !== null, "recall() must send { query, datasets }");
+    assert.ok(
+      !source.includes("search_type") || source.indexOf("search_type") > source.indexOf("function recall"),
+      "recall() must NOT include search_type in the body"
+    );
+  });
+
   // ===== Report =====
   console.log("\n" + "=".repeat(60));
-  console.log("COGNEE INTEGRATION TESTS (G1–G9)");
+  console.log("COGNEE INTEGRATION TESTS (G1–G10)");
   console.log("=".repeat(60));
   for (const r of results) {
     const icon = r.pass ? "✅" : "❌";
@@ -249,7 +310,7 @@ async function main() {
     console.error(`\n❌ ${failCount} test(s) FAILED — remediation incomplete`);
     process.exit(1);
   } else {
-    console.log(`\n✅ All ${passCount} G1–G9 tests PASS`);
+    console.log(`\n✅ All ${passCount} G1–G10 tests PASS`);
   }
 }
 

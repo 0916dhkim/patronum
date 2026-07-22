@@ -12,8 +12,14 @@ import { config } from "../config.js";
 const COGNEE_BASE_URL = "http://127.0.0.1:8001";
 const DATASET_NAME = "patronum_memory";
 
-// Timeouts (ms) — validated in PoC: recall median 289ms
-const TIMEOUT_RECALL = 5_000;
+// Timeouts (ms)
+// RECALL: High-level graph completion uses LLM (gpt-5-mini via OpenRouter) to
+// synthesize answers from the knowledge graph. Observed latencies range from
+// ~6s (GRAPH_COMPLETION_COT warm) to ~18s+ (GRAPH_COMPLETION cold/routed).
+// We use 30s to cover LLM inference + graph traversal while still bounding
+// the total wait and preventing indefinite blocking.
+// CHUNKS recall (legacy) takes ~300-500ms by comparison.
+const TIMEOUT_RECALL = 30_000;
 const TIMEOUT_ADD = 30_000;       // cognify can take ~55s
 const TIMEOUT_COGNIFY = 5_000;
 const TIMEOUT_HEALTH = 2_000;
