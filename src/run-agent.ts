@@ -1,5 +1,3 @@
-import { config } from "./config.js";
-import { loadContextFile } from "./context.js";
 import { getAgentDef, type AgentDef } from "./agents.js";
 import { getToolDefinitions, executeTool, setCurrentChatId, setSkillOverrides } from "./tools/index.js";
 import { buildSkillsSummary } from "./skills.js";
@@ -18,7 +16,7 @@ import type {
 const MAX_TOKENS = 48000; // Must be greater than thinking budget_tokens (32000) + output capacity
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
+export function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
   const system: TextBlock[] = [
     { type: "text", text: CLAUDE_CODE_IDENTITY },
   ];
@@ -27,12 +25,6 @@ function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
   if (agent.systemPrompt) {
     system.push({ type: "text", text: agent.systemPrompt });
   }
-
-  // Inject shared memory files (USER.md + MEMORY.md) for all specialists
-  const userMd = loadContextFile(config.workspace, "USER.md");
-  const memoryMd = loadContextFile(config.workspace, "MEMORY.md");
-  if (userMd) system.push({ type: "text", text: userMd });
-  if (memoryMd) system.push({ type: "text", text: memoryMd });
 
   // Inject skill summary (skill bodies load on-demand via load_skill tool)
   const skillsSummary = buildSkillsSummary();

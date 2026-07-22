@@ -226,7 +226,7 @@ describe("File-backed shared memory", () => {
   });
 });
 
-describe("Subagent system prompt", () => {
+describe("Subagent system prompt excludes USER.md and MEMORY.md", () => {
   let testCtx: ReturnType<typeof setupWorkspace>;
 
   before(() => {
@@ -237,19 +237,35 @@ describe("Subagent system prompt", () => {
     testCtx.cleanup();
   });
 
-  it("should include USER.md and MEMORY.md in buildAgentSystemPrompt", async () => {
-    // Verify the function references USER.md and MEMORY.md via loadContextFile
-    const { loadContextFile } = await import("../context.js");
-    const { DEFAULT_USER, DEFAULT_MEMORY } = await import("../templates.js");
+  it("should NOT include USER.md or MEMORY.md in buildAgentSystemPrompt", async () => {
+    // Write distinct USER.md and MEMORY.md content with unique markers
+    writeFile(testCtx.workspace, "USER.md", "# UNIQUE_TEST_USER_MARKER");
+    writeFile(testCtx.workspace, "MEMORY.md", "# UNIQUE_TEST_MEMORY_MARKER");
 
-    // Verify loadContextFile can load USER.md and MEMORY.md from the templates when
-    // files don't exist (proving the function is wired to look for these files)
-    const emptyWorkspace = setupWorkspace();
-    const userMd = loadContextFile(emptyWorkspace.workspace, "USER.md");
-    const memoryMd = loadContextFile(emptyWorkspace.workspace, "MEMORY.md");
+    // Override config.workspace to point at our temp dir
+    const { config } = await import("../config.js");
+    const originalWorkspace = config.workspace;
+    (config as any).workspace = testCtx.workspace;
 
-    assert.equal(userMd, DEFAULT_USER, "USER.md template should be returned for missing file");
-    assert.equal(memoryMd, DEFAULT_MEMORY, "MEMORY.md template should be returned for missing file");
-    emptyWorkspace.cleanup();
+    try {
+      const { buildAgentSystemPrompt } = await import("../run-agent.js");
+      const { getAgentDef } = await import("../agents.js");
+      const agent = getAgentDef("alex"); // any registered agent
+
+      if (!agent) {
+        // If no agents configured, skip — test environment may not have SUBAGENT.md files
+        return;
+      }
+
+      const system = buildAgentSystemPrompt(agent);
+      const allText = system.map((b) => b.text).join("\n");
+
+      assert.ok(!allText.includes("UNIQUE_TEST_USER_MARKER"),
+        "USER.md content must NOT appear in specialist system prompt");
+      assert.ok(!allText.includes("UNIQUE_TEST_MEMORY_MARKER"),
+        "MEMORY.md content must NOT appear in specialist system prompt");
+    } finally {
+      (config as any).workspace = originalWorkspace;
+    }
   });
 });
