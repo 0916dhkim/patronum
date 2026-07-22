@@ -254,6 +254,10 @@ export async function forget(datasetName?: string): Promise<void> {
  * Uses Python wrapper script for metadata support (P1 workaround).
  * Spawns child process asynchronously — does NOT block the Node event loop.
  * Required for memory_fetch_context metadata recovery.
+ *
+ * SECURITY: Cognee runtime credentials (pgvector password, embedding/LLM API keys)
+ * are fetched from Vaultwarden at runtime — never written to disk or logged.
+ * Same runtime-only model as cognee-start.sh / vaultwarden_secrets.cjs.
  */
 export async function addWithMetadata(
   text: string,
@@ -282,9 +286,38 @@ export async function addWithMetadata(
     const venvPath = "/var/lib/patronum/cognee/.venv312/bin/python";
     const wrapperScript = "/var/lib/patronum/cognee/scripts/add_with_metadata.py";
 
+    // ───────────────────────────────────────────────────────────
+    // Runtime secret injection: fetch Cognee credentials from Vaultwarden
+    // to provide pgvector password and embedding/LLM keys for the Python
+    // subprocess. Same mechanism as cognee-start.sh — no disk persistence.
+    // ───────────────────────────────────────────────────────────
+    const secretsEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) secretsEnv[k] = v;
+    }
+    try {
+      const vaultHelper = "/var/lib/patronum/source/dist/tools/vaultwarden_secrets.cjs";
+      const { stdout: secretsOut } = await execFileAsync(
+        "/usr/bin/node", [vaultHelper],
+        { timeout: 10_000, env: { ...process.env } }
+      );
+      for (const line of secretsOut.trim().split("\n")) {
+        const eqIdx = line.indexOf("=");
+        if (eqIdx > 0) {
+          const k = line.substring(0, eqIdx);
+          const v = line.substring(eqIdx + 1);
+          if (k && v) secretsEnv[k] = v;
+        }
+      }
+    } catch {
+      // If Vaultwarden fetch fails, fall through with existing env
+      // The Python wrapper will likely fail with missing pgvector credentials,
+      // and Patronum will fall back to REST API add() without metadata.
+    }
+
     const { stdout } = await execFileAsync(venvPath, [wrapperScript, textFile, metaFile], {
       timeout: 30_000,
-      env: { ...process.env },
+      env: secretsEnv,
     });
 
     return JSON.parse(stdout) as CogneeAddResult;
