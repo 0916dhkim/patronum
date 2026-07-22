@@ -33,3 +33,35 @@ export const DEFAULT_AGENTS = `\
 - Only use spawn_agent after the workspace has agents/<name>/SUBAGENT.md files configured
 - You can edit your own source code — see project context for details
 `;
+
+export const DEFAULT_USER = `\
+# USER.md
+
+> **Ownership:** This shared file may be edited only by Lin, the orchestrator.
+> All specialist agents may read it but must not modify it.
+
+## User
+- (not yet configured)
+
+## Working Preferences
+- (not yet configured)
+`;
+
+export const DEFAULT_MEMORY = `\
+# MEMORY.md
+
+> **Ownership:** This shared file may be edited only by Lin, the orchestrator.
+> All specialist agents may read it but must not modify it.
+
+## Active Objectives
+- (not yet configured)
+
+## Durable Decisions
+- (not yet configured)
+
+## Current System State
+- (not yet configured)
+
+## Constraints
+- (not yet configured)
+`;

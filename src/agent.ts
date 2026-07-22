@@ -63,6 +63,12 @@ export function buildSystemPrompt(options?: AgentOptions): Array<{ type: "text";
   const agents = options?.agentsContent ?? loadContextFile(workspace, "AGENTS.md");
   if (agents) system.push({ type: "text", text: agents });
 
+  // Always inject shared memory files (USER.md + MEMORY.md)
+  const userMd = loadContextFile(workspace, "USER.md");
+  const memoryMd = loadContextFile(workspace, "MEMORY.md");
+  if (userMd) system.push({ type: "text", text: userMd });
+  if (memoryMd) system.push({ type: "text", text: memoryMd });
+
   // Always inject project self-knowledge
   system.push({ type: "text", text: getProjectContext() });
 

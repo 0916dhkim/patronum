@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_SOUL, DEFAULT_AGENTS } from "./templates.js";
+import { DEFAULT_SOUL, DEFAULT_AGENTS, DEFAULT_USER, DEFAULT_MEMORY } from "./templates.js";
 
 const TEMPLATES: Record<string, string> = {
   "SOUL.md": DEFAULT_SOUL,
   "AGENTS.md": DEFAULT_AGENTS,
+  "USER.md": DEFAULT_USER,
+  "MEMORY.md": DEFAULT_MEMORY,
 };
 
 /**

@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { loadContextFile } from "./context.js";
 import { getAgentDef, type AgentDef } from "./agents.js";
 import { getToolDefinitions, executeTool, setCurrentChatId, setSkillOverrides } from "./tools/index.js";
 import { buildSkillsSummary } from "./skills.js";
@@ -26,6 +27,12 @@ function buildAgentSystemPrompt(agent: AgentDef): TextBlock[] {
   if (agent.systemPrompt) {
     system.push({ type: "text", text: agent.systemPrompt });
   }
+
+  // Inject shared memory files (USER.md + MEMORY.md) for all specialists
+  const userMd = loadContextFile(config.workspace, "USER.md");
+  const memoryMd = loadContextFile(config.workspace, "MEMORY.md");
+  if (userMd) system.push({ type: "text", text: userMd });
+  if (memoryMd) system.push({ type: "text", text: memoryMd });
 
   // Inject skill summary (skill bodies load on-demand via load_skill tool)
   const skillsSummary = buildSkillsSummary();
