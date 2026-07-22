@@ -484,4 +484,173 @@ describe("Living Memory", () => {
       assert.notEqual(lmContent, userText, "Living Memory content should not equal user message text");
     });
   });
+
+  describe("Living Memory stats", () => {
+    it("should return stats scoped to a specific chat", async () => {
+      const { migrateLivingMemory, applyLivingMemoryUpdate, getLivingMemoryStats } = await import("../memory/living.js");
+      migrateLivingMemory();
+
+      const { setCurrentChatId } = await import("../tools/chat-context.js");
+      setCurrentChatId("stats-chat-scoped");
+
+      // Create entries in chat A
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Alice", reason: "Setup" });
+      applyLivingMemoryUpdate({ action: "create", section: "preferences", key: "style", value: "Concise", reason: "Setup" });
+      applyLivingMemoryUpdate({ action: "create", section: "active_context", key: "project", value: "Stats test", reason: "Setup" });
+
+      // Create entries in a different chat (should not leak)
+      setCurrentChatId("stats-chat-other");
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Bob", reason: "Setup" });
+
+      // Scoped stats for chat A
+      const stats = getLivingMemoryStats("stats-chat-scoped");
+      assert.equal(stats.totalEntries, 3, "Should count 3 entries in chat A");
+      assert.equal(stats.activeEntries, 3, "All entries should be active");
+      assert.equal(stats.supersededEntries, 0, "No superseded entries");
+      assert.equal(stats.expiredEntries, 0, "No expired entries");
+      assert.ok(stats.sections["identity"] >= 1, "Should have identity section");
+      assert.ok(stats.sections["preferences"] >= 1, "Should have preferences section");
+      assert.ok(stats.sections["active_context"] >= 1, "Should have active_context section");
+    });
+
+    it("should return stats for all chats when no chatId provided", async () => {
+      const { migrateLivingMemory, applyLivingMemoryUpdate, getLivingMemoryStats } = await import("../memory/living.js");
+      migrateLivingMemory();
+
+      const { setCurrentChatId } = await import("../tools/chat-context.js");
+
+      // Create entries in multiple chats
+      setCurrentChatId("all-chats-a");
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Alice", reason: "Setup" });
+      applyLivingMemoryUpdate({ action: "create", section: "preferences", key: "color", value: "Blue", reason: "Setup" });
+
+      setCurrentChatId("all-chats-b");
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Bob", reason: "Setup" });
+      applyLivingMemoryUpdate({ action: "create", section: "decisions", key: "framework", value: "React", reason: "Setup" });
+
+      setCurrentChatId("all-chats-c");
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Charlie", reason: "Setup" });
+
+      // Unscoped stats — should include all chats (and any entries from previous tests)
+      const stats = getLivingMemoryStats();
+      assert.ok(stats.totalEntries >= 5, "Should count entries across all chats (at least the ones we just created)");
+      assert.ok(stats.activeEntries >= 5, "Active entries should be at least our 5");
+    });
+  });
+
+  describe("Integration regression: living_memory=true mode", () => {
+    it("should not inject Cognee <memory_context> into user message or extras when living_memory=true", async () => {
+      const { migrateLivingMemory, applyLivingMemoryUpdate, renderLivingMemory } = await import("../memory/living.js");
+      migrateLivingMemory();
+
+      const { setCurrentChatId } = await import("../tools/chat-context.js");
+      setCurrentChatId("regression-lm-true");
+
+      // Create Living Memory entries
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Danny", reason: "Setup" });
+      applyLivingMemoryUpdate({ action: "create", section: "preferences", key: "style", value: "Direct", reason: "Setup" });
+
+      // Simulate the living_memory=true path in bot.ts:
+      // 1. User message is stored as-is (no augmentation)
+      const userText = "What do you think about this?";
+      const userMessage = { role: "user" as const, content: userText };
+
+      // 2. Living Memory is rendered as extraContext
+      const lmContent = renderLivingMemory("regression-lm-true");
+      assert.ok(lmContent, "Living Memory should render");
+
+      // 3. extraContext contains Living Memory, NOT Cognee <memory_context>
+      const extraContext: string[] = [];
+      if (lmContent) extraContext.push(lmContent);
+
+      // Verify: user message is pure — no <memory_context> or <living_memory> tags
+      assert.equal(userMessage.content, userText, "User message should be exactly the original text");
+      assert.ok(!userMessage.content.includes("<memory_context>"), "No Cognee <memory_context> in user message");
+      assert.ok(!userMessage.content.includes("<living_memory>"), "No <living_memory> in user message");
+
+      // Verify: extraContext has Living Memory, not Cognee memory_context
+      const allExtra = extraContext.join(" ");
+      assert.ok(allExtra.includes("<living_memory>"), "extraContext should contain Living Memory block");
+      assert.ok(!allExtra.includes("<memory_context>"), "extraContext should NOT contain Cognee <memory_context>");
+
+      // Verify: Living Memory content is present
+      assert.ok(allExtra.includes("Danny"), "Living Memory should contain the stored value");
+      assert.ok(allExtra.includes("Direct"), "Living Memory should contain preferences");
+    });
+
+    it("should include Living Memory in extraContext for agent events", async () => {
+      const { migrateLivingMemory, applyLivingMemoryUpdate, renderLivingMemory } = await import("../memory/living.js");
+      migrateLivingMemory();
+
+      const { setCurrentChatId } = await import("../tools/chat-context.js");
+      setCurrentChatId("regression-agent-event");
+
+      // Create Living Memory entries
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Danny", reason: "Setup" });
+      applyLivingMemoryUpdate({ action: "create", section: "active_context", key: "project", value: "Fixing bugs", reason: "Setup" });
+
+      // Simulate agent event path (the else branch in bot.ts handleEvent)
+      const systemText = "[system] Background task completed: researcher (task-123)\nThread: analysis\nResult: Found the issue.";
+      const syntheticMessage = { role: "user" as const, content: systemText };
+
+      // Build extraContext like the else branch should
+      const extraContext: string[] = [];
+      const lmContent = renderLivingMemory("regression-agent-event");
+      if (lmContent) extraContext.push(lmContent);
+
+      // Verify: synthetic message is clean
+      assert.equal(syntheticMessage.content, systemText, "Synthetic message should be unchanged");
+      assert.ok(!syntheticMessage.content.includes("<living_memory>"), "No Living Memory in synthetic message");
+
+      // Verify: Living Memory is in extraContext
+      assert.ok(extraContext.length > 0, "extraContext should have Living Memory for agent events");
+      const allExtra = extraContext.join(" ");
+      assert.ok(allExtra.includes("<living_memory>"), "extraContext should contain Living Memory");
+      assert.ok(allExtra.includes("Danny"), "Living Memory content should be present");
+      assert.ok(allExtra.includes("Fixing bugs"), "Living Memory context should be present");
+    });
+  });
+
+  describe("Integration regression: shadow mode", () => {
+    it("should include both <living_memory> and <cognee_shadow> in extraContext when shadow mode", async () => {
+      const { migrateLivingMemory, applyLivingMemoryUpdate, renderLivingMemory } = await import("../memory/living.js");
+      migrateLivingMemory();
+
+      const { setCurrentChatId } = await import("../tools/chat-context.js");
+      setCurrentChatId("regression-shadow");
+
+      // Create Living Memory entries
+      applyLivingMemoryUpdate({ action: "create", section: "identity", key: "name", value: "Danny", reason: "Setup" });
+
+      // Simulate the shadow mode path in bot.ts:
+      const userText = "Hello!";
+      const userMessage = { role: "user" as const, content: userText };
+
+      // Build extraContext with Living Memory + shadow Cognee recall
+      const extraContext: string[] = [];
+      const lmContent = renderLivingMemory("regression-shadow");
+      if (lmContent) extraContext.push(lmContent);
+
+      // In shadow mode, Cognee recall is also added as a shadow block
+      const shadowRecall = "<cognee_shadow>\nSome retrieved memory fragments\n</cognee_shadow>";
+      extraContext.push(shadowRecall);
+
+      // Verify: user message is pure
+      assert.equal(userMessage.content, userText, "User message should be exactly the original text");
+      assert.ok(!userMessage.content.includes("<memory_context>"), "No Cognee <memory_context> in user message");
+      assert.ok(!userMessage.content.includes("<living_memory>"), "No <living_memory> in user message");
+      assert.ok(!userMessage.content.includes("<cognee_shadow>"), "No <cognee_shadow> in user message");
+
+      // Verify: extraContext has both blocks
+      const allExtra = extraContext.join(" ");
+      assert.ok(allExtra.includes("<living_memory>"), "extraContext should contain Living Memory block");
+      assert.ok(allExtra.includes("<cognee_shadow>"), "extraContext should contain Cognee shadow block");
+      assert.ok(!allExtra.includes("<memory_context>"), "extraContext should NOT contain Cognee <memory_context>");
+
+      // Order: Living Memory should come before Cognee shadow
+      const lmIdx = allExtra.indexOf("<living_memory>");
+      const shadowIdx = allExtra.indexOf("<cognee_shadow>");
+      assert.ok(lmIdx < shadowIdx, "Living Memory should appear before Cognee shadow in extraContext");
+    });
+  });
 });

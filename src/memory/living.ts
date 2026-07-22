@@ -850,7 +850,7 @@ export interface LivingMemoryStats {
 
 export function getLivingMemoryStats(chatId?: string): LivingMemoryStats {
   const d = getDb();
-  const chatFilter = chatId ? "WHERE chat_id = ?" : "";
+  const chatFilter = chatId ? "WHERE chat_id = ?" : "WHERE 1=1";
   const chatParams = chatId ? [chatId] : [];
 
   const total = d.prepare(`SELECT COUNT(*) as c FROM living_memory ${chatFilter}`).get(...chatParams) as { c: number };

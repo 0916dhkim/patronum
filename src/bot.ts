@@ -1037,6 +1037,26 @@ async function handleEvent(
     const syntheticMessage: Message = { role: "user", content: systemText };
     history.push(syntheticMessage);
     saveMessage(chatId, syntheticMessage);
+
+    // Living Memory applies to ALL turns, including agent events
+    if (config.livingMemory) {
+      const lmContent = renderLivingMemory(chatId);
+      if (lmContent) {
+        extraContext.push(lmContent);
+      }
+
+      // In shadow mode, also append Cognee recall as a shadow block
+      if (config.livingMemory === "shadow" && config.voyageApiKey) {
+        try {
+          const recallContent = await autoRecall(systemText);
+          if (recallContent) {
+            extraContext.push(`<cognee_shadow>\n${recallContent}\n</cognee_shadow>`);
+          }
+        } catch (err) {
+          console.error(`[bot] Shadow recall failed for agent event:`, err);
+        }
+      }
+    }
   }
 
   // Resolve the active model exactly once per main turn.
