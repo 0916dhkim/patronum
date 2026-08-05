@@ -225,6 +225,35 @@ export function updateAssistantMessagesTelegramId(
 }
 
 /**
+ * Update telegram_message_id for a contiguous range of assistant messages,
+ * addressed by 1-based position from the most recent (1 = most recent).
+ * Used to stamp the pre-tool assistant messages that were flushed as their own
+ * Telegram message at a tool-call boundary.
+ */
+export function updateAssistantMessagesTelegramIdAtOffset(
+  chatId: string,
+  nthFromMostRecent: number,
+  count: number,
+  telegramMessageId: number
+): void {
+  const rows = db.prepare(
+    `SELECT id FROM messages
+     WHERE chat_id = ? AND role = 'assistant'
+     ORDER BY id DESC
+     LIMIT ? OFFSET ?`
+  ).all(chatId, count, nthFromMostRecent - 1) as Array<{ id: number }>;
+
+  if (rows.length > 0) {
+    const updateStmt = db.prepare(
+      `UPDATE messages SET telegram_message_id = ? WHERE id = ?`
+    );
+    for (const row of rows) {
+      updateStmt.run(telegramMessageId, row.id);
+    }
+  }
+}
+
+/**
  * Look up a message by its Telegram message ID. Returns the role and truncated text content.
  * Used to resolve reply annotations to actual message content.
  * When multiple rows share the same telegram_message_id (e.g., tool_use + text response),

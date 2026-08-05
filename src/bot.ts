@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateLastMessageTelegramId, updateAssistantMessagesTelegramId } from "./session.js";
+import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateAssistantMessagesTelegramId, updateAssistantMessagesTelegramIdAtOffset } from "./session.js";
 import { initAgentThread, appendToAgentThread } from "./agent-thread.js";
 import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
 import { DraftStreamer } from "./draft-stream.js";
@@ -957,6 +957,14 @@ async function handleEvent(
   // Run Lin with streaming responses
   const draftStreamer = new DraftStreamer(bot, chatId);
 
+  // Mid-turn flush bookkeeping: flushPromise resolves to the Telegram message ID
+  // of the flushed pre-tool message (null if nothing was flushed or the send
+  // failed). flushedAssistantCount = how many assistant messages' text was
+  // included in that flush; they are excluded from the final send to avoid
+  // duplicating the preamble.
+  let flushPromise: Promise<number | null> | null = null;
+  let flushedAssistantCount = 0;
+
   try {
     const agentResult = await runAgentStreaming(
       history,
@@ -964,18 +972,15 @@ async function handleEvent(
         onTextDelta: (_delta: string, fullText: string) => {
           draftStreamer.update(fullText);
         },
-        onToolStart: (toolName: string) => {
+        onToolStart: (toolName: string, assistantMessageCount: number) => {
           console.log(`[stream] Tool starting: ${toolName}`);
           // If self_restart is among the tools, finalize the draft cleanly
           // so accumulated text is sent as a real message before restart
-          if (toolName.includes("self_restart")) {
-            draftStreamer.finalizeClean().then((telegramMessageId) => {
-              if (telegramMessageId) {
-                // Record the Telegram message ID with the assistant message
-                updateLastMessageTelegramId(chatId, "assistant", telegramMessageId);
-              }
-            }).catch((err) => {
+          if (toolName.includes("self_restart") && !flushPromise) {
+            flushedAssistantCount = assistantMessageCount;
+            flushPromise = draftStreamer.finalizeClean().catch((err) => {
               console.warn("[stream] finalizeClean failed:", err);
+              return null;
             });
           }
         },
@@ -995,6 +1000,13 @@ async function handleEvent(
     // Stop the draft streamer before sending the final message
     draftStreamer.stop();
 
+    // Settle any pending tool-boundary flush so we know exactly which assistant
+    // messages were already sent before the final extraction runs.
+    const flushedMessageId = flushPromise ? await flushPromise : null;
+    // Only exclude messages if the flush actually delivered a Telegram message;
+    // on send failure the text must reappear in the final message (no data loss).
+    const flushedCount = flushedMessageId != null ? flushedAssistantCount : 0;
+
     const { messages: newMessages, inputTokens, earlyTermination } = agentResult;
 
     // Store the last-known input token count on the chat state for status visibility
@@ -1010,6 +1022,19 @@ async function handleEvent(
           : msg.content,
       };
       saveMessage(chatId, messageToPersist);
+    }
+
+    // Stamp the flushed pre-tool assistant messages with the flushed Telegram ID.
+    // Done here (after persistence) instead of in the fire-and-forget flush
+    // callback so it deterministically targets current-turn rows.
+    if (flushedMessageId != null && flushedCount > 0) {
+      const totalAssistant = newMessages.filter((m) => m.role === "assistant").length;
+      // Flushed messages are the oldest flushedCount of the turn: counting from
+      // the most recent, the range starts at (totalAssistant - flushedCount + 1).
+      const nthFromMostRecent = totalAssistant - flushedCount + 1;
+      if (nthFromMostRecent >= 1) {
+        updateAssistantMessagesTelegramIdAtOffset(chatId, nthFromMostRecent, flushedCount, flushedMessageId);
+      }
     }
 
     // Token-based compaction (skip on early termination — process is about to die)
@@ -1042,7 +1067,13 @@ async function handleEvent(
     // Skip sending final message if the loop terminated early (a tool like self_restart requested it)
     if (!earlyTermination) {
       // Extract reply text
-      let reply = extractTextFromResponse(newMessages);
+      let reply = extractTextFromResponse(newMessages, flushedCount);
+      // If all remaining assistant text was flushed at the tool boundary, the
+      // extraction returns the "(no response)" sentinel — don't send it; the
+      // user already has the text. ("") makes splitMessage yield no chunks.
+      if (flushedCount > 0 && reply === "(no response)") {
+        reply = "";
+      }
 
       // Check if the last assistant message in newMessages contributed any text
       let lastAssistantHasText = false;
@@ -1120,10 +1151,10 @@ async function handleEvent(
         // Store the Telegram message ID with all assistant messages from this turn
         // Count how many assistant messages were in newMessages
         const assistantMessageCount = newMessages.filter(msg => msg.role === "assistant").length;
-        // Stamp all N most recent assistant messages with this Telegram ID
-        // This ensures the full context is stamped even if the turn had multiple assistant messages
-        if (telegramMessageId && assistantMessageCount > 0) {
-          updateAssistantMessagesTelegramId(chatId, assistantMessageCount, telegramMessageId);
+        const unflushedAssistantCount = assistantMessageCount - flushedCount;
+        // Stamp all unflushed assistant messages with this Telegram ID
+        if (telegramMessageId && unflushedAssistantCount > 0) {
+          updateAssistantMessagesTelegramId(chatId, unflushedAssistantCount, telegramMessageId);
         }
       }
     }

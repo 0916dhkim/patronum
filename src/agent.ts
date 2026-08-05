@@ -148,8 +148,12 @@ export interface AgentResult {
 export interface StreamingCallbacks {
   /** Called with each new text chunk as it arrives */
   onTextDelta: (delta: string, accumulatedText: string) => void;
-  /** Called when tool execution starts */
-  onToolStart?: (toolName: string) => void;
+  /**
+   * Called when tool execution starts.
+   * assistantMessageCount = assistant messages in newMessages at this point;
+   * all of their text blocks are part of the accumulated stream text.
+   */
+  onToolStart?: (toolName: string, assistantMessageCount: number) => void;
   /** Called when tool execution finishes */
   onToolEnd?: (toolName: string) => void;
 }
@@ -329,7 +333,10 @@ export async function runAgentStreaming(
       if (signal?.aborted) throw new TaskCancelledError("Task cancelled", newMessages);
 
       if (toolUseBlocks.length > 0) {
-        callbacks.onToolStart?.(toolUseBlocks.map((b) => b.name).join(", "));
+        callbacks.onToolStart?.(
+          toolUseBlocks.map((b) => b.name).join(", "),
+          newMessages.filter((m) => m.role === "assistant").length
+        );
 
         const toolResults: ToolResultBlock[] = await Promise.all(
           toolUseBlocks.map(async (block) => {
@@ -642,11 +649,15 @@ export async function runAgent(messages: Message[], options?: AgentOptions, sign
   return { messages: newMessages, inputTokens: lastInputTokens, earlyTermination };
 }
 
-export function extractTextFromResponse(messages: Message[]): string {
-  // Collect text blocks from all assistant messages in order
+export function extractTextFromResponse(messages: Message[], skipAssistantMessages = 0): string {
+  // Collect text blocks from all assistant messages in order, skipping the first
+  // N assistant messages (text already flushed at a tool-call boundary).
   const allTextParts: string[] = [];
+  let assistantIndex = 0;
   for (const msg of messages) {
     if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      assistantIndex++;
+      if (assistantIndex <= skipAssistantMessages) continue;
       const textParts = msg.content
         .filter((b): b is { type: "text"; text: string } => b.type === "text")
         .map((b) => b.text);
