@@ -3,7 +3,7 @@ import { getToolDefinitions, executeTool, setCurrentChatId, setSkillOverrides } 
 import { buildSkillsSummary } from "./skills.js";
 import { logUsage } from "./prompt-cache.js";
 import { callLLM } from "./providers/index.js";
-import { persistSubagentMessages } from "./agent-thread.js";
+import { persistSubagentMessages, formatAgentThread } from "./agent-thread.js";
 import type {
   Message,
   ClaudeResponse,
@@ -164,8 +164,8 @@ function filterAndSanitizeContent(content: ContentBlock[]): ContentBlock[] {
 
 /**
  * Run a specialist agent with a named thread context.
- * The agent's first API call is forced to call read_agent_thread,
- * which loads the thread live from the DB.
+ * The thread context is injected directly into the agent's system prompt
+ * so it is always present before the agent reasons — no forced tool call.
  */
 export async function runAgentWithThread(
   agent: AgentDef,
@@ -183,26 +183,29 @@ export async function runAgentWithThread(
   // Set skill overrides (undefined in production — no overrides)
   setSkillOverrides(undefined);
 
-  // Build system prompt (no thread context — it arrives via tool)
+  // Build system prompt, then inject the thread context directly.
+  //
+  // Previously the first call was forced to invoke read_agent_thread via
+  // tool_choice. That forced/named tool_choice is rejected by several
+  // OpenRouter providers (Novita, Baidu, Z.AI, SiliconFlow, Alibaba, etc.)
+  // and is entirely forbidden for thinking-mode models (e.g. Qwen3.8 Max).
+  // Injecting the thread context into the system prompt achieves the same
+  // goal — the agent always has the thread before it reasons — without
+  // depending on forced tool_choice, so any model can serve as a subagent.
   const systemPrompt = buildAgentSystemPrompt(agent);
+  const threadContext = formatAgentThread(threadId, threadName);
+  systemPrompt.push({ type: "text", text: threadContext });
 
   const messages: Message[] = [{ role: "user", content: userPrompt }];
 
   let lastAssistantContent: ContentBlock[] = [];
-  let isFirstCall = true;
 
   try {
     while (true) {
       if (signal?.aborted) throw new Error("Task cancelled");
 
-      // Force read_agent_thread on the first call
-      const toolChoice = isFirstCall
-        ? ({ type: "tool", name: "read_agent_thread" } as const)
-        : undefined;
-
-      const response = await callClaudeForAgent(agent, messages, systemPrompt, signal, toolChoice);
+      const response = await callClaudeForAgent(agent, messages, systemPrompt, signal, undefined);
       logUsage(`agent:${agent.name}`, response.usage);
-      isFirstCall = false;
 
       const assistantMessage: Message = {
         role: "assistant",
