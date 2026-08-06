@@ -1,4 +1,5 @@
 import { Telegraf } from "telegraf";
+import { HttpsAgent } from "agentkeepalive";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateAssistantMessagesTelegramId, updateAssistantMessagesTelegramIdAtOffset } from "./session.js";
 import { initAgentThread, appendToAgentThread } from "./agent-thread.js";
@@ -190,26 +191,27 @@ export async function startBot(): Promise<void> {
     }
   }
 
+  // -------------------------------------------------------------------
+  // Idle-socket eviction on the shared https.Agent (plan §3.3, fix B)
+  // telegraf's default agent is a plain native https.Agent which does NOT
+  // support freeSocketTimeout (review 1407108 proved it inert). Switch to
+  // agentkeepalive's HttpsAgent — a drop-in for node-fetch 2.7 — whose
+  // freeSocketTimeout evicts only FREE (idle) sockets, so the active
+  // getUpdates long-poll socket is never touched.
+  // -------------------------------------------------------------------
   const bot = new Telegraf(config.telegramBotToken, {
     handlerTimeout: Infinity,
+    telegram: {
+      agent: new HttpsAgent({
+        keepAlive: true,
+        keepAliveMsecs: 10000,
+        freeSocketTimeout: 20000, // evict idle free sockets after 20s
+      }),
+    },
   });
   setBot(bot);
   const BOT_START_TIME = Math.floor(Date.now() / 1000);
-  // -------------------------------------------------------------------
-  // Idle-socket eviction on the shared https.Agent (plan §3.3)
-  // Node 22's https.Agent supports freeSocketTimeout to evict idle free
-  // sockets that have been in the pool unused for too long. This prevents
-  // dead-socket reuse on flaky paths (home WiFi, NAT conntrack drops)
-  // without touching in-flight sockets (getUpdates long-poll is fine).
-  // -------------------------------------------------------------------
-  {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const botOptions = (bot.telegram as any).options as Record<string, any>;
-    if (botOptions.agent) {
-      botOptions.agent.freeSocketTimeout = 20000;
-      console.log("[agent] Applied freeSocketTimeout=20000ms for idle-socket eviction");
-    }
-  }
+  console.log("[agent] Using agentkeepalive HttpsAgent (freeSocketTimeout=20000ms for idle-socket eviction)");
 
 
   // -------------------------------------------------------------------

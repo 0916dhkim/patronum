@@ -37,6 +37,16 @@ function assertEq<T>(actual: T, expected: T, msg: string): void {
   }
 }
 
+/**
+ * Assert a boolean that is mutated inside an async closure. TypeScript's CFG
+ * narrows such `let` variables to their literal initializer (the closure write
+ * isn't visible in the straight-line flow), so take the widened `boolean` type
+ * here and compare inside where the narrowing is reset.
+ */
+function assertTrue(value: boolean, message: string): void {
+  assert(value === true, message);
+}
+
 function section(name: string): void {
   console.log(`\n── ${name} ──`);
 }
@@ -188,6 +198,36 @@ resetState();
   assert(cls.type === "unknown", "String throw → unknown");
 }
 
+// A14. 400 "chat not found" → permanent_disable (was content_error)
+{
+  const cls = classifyDraftError(tgError(400, "Bad Request: chat not found"));
+  assert(cls.type === "permanent_disable", '400 "chat not found" → permanent_disable');
+}
+
+// A15. 400 "not enough rights" → permanent_disable (was content_error)
+{
+  const cls = classifyDraftError(tgError(400, "Bad Request: not enough rights to send text messages to the chat"));
+  assert(cls.type === "permanent_disable", '400 "not enough rights" → permanent_disable');
+}
+
+// A16. 400 "kicked" → permanent_disable (was content_error)
+{
+  const cls = classifyDraftError(tgError(400, "Bad Request: bot was kicked from the group chat"));
+  assert(cls.type === "permanent_disable", '400 "kicked" → permanent_disable');
+}
+
+// A17. 400 "deactivated" → permanent_disable (was content_error)
+{
+  const cls = classifyDraftError(tgError(400, "Bad Request: user is deactivated"));
+  assert(cls.type === "permanent_disable", '400 "deactivated" → permanent_disable');
+}
+
+// A18. 401 (invalid token) → permanent_disable (was transient_network)
+{
+  const cls = classifyDraftError(tgError(401, "Unauthorized"));
+  assert(cls.type === "permanent_disable", "401 → permanent_disable");
+}
+
 // ===========================================================================
 // B. Cooldown behavior (plan §3.1, §7.A.2-3)
 // ===========================================================================
@@ -276,26 +316,46 @@ section("B. Cooldown behavior");
   assert(succeeded, "Flush resumes after cooldown expires");
 }
 
+// B4. 429 cooldown includes bounded jitter (avoids lockstep retries across chats)
+{
+  resetState();
+  const bot = makeStubBot(() => {
+    throw tgError(429, "Too Many Requests", { retry_after: 2 });
+  });
+
+  const ds = new DraftStreamer(bot, "jitter_test", { throttleMs: 10 });
+  const t0 = Date.now();
+  ds.update("Long text triggering a 429 so we can measure the cooldown jitter range.");
+  await new Promise((r) => setTimeout(r, 100));
+
+  const cd = _getChatCooldowns().get("jitter_test")!;
+  // until = flushStart + retryAfter*1000 + jitter, where jitter ∈ [0, 1000]
+  // and flushStart is within [t0, t0+100]. Assert base honored and jitter bounded.
+  assert(cd.until >= t0 + 2000, "Cooldown honors retry_after base (2000ms)");
+  assert(cd.until <= t0 + 2000 + 1100, "Cooldown jitter is bounded (<= ~1s + slack)");
+}
+
 // ===========================================================================
 // C. Serialization / coalescing (plan §3.2, §7.A.4)
 // ===========================================================================
 
 section("C. Serialization / coalescing");
 
-// C1. Rapid updates with a slow stub → only one in-flight at a time.
-//    Verified by checking that while a flush is pending, no second concurrent
-//    callApi call is made. After the first resolves, the pending text is
-//    available for the debounce timer to pick up.
+// C1. Rapid updates with a slow stub → coalescing fires exactly once with the
+//    LATEST snapshot. Uses an injectable tiny throttle so mid-flight updates
+//    actually pass the throttle gate and reach flush() (fix: coalesce path fires).
 {
   resetState();
   const sentTexts: string[] = [];
   let resolveFirstFlush: (() => void) | null = null;
-  let firstCallReceived = false;
+
+  const firstText = "X".repeat(100);
+  const secondText = "X".repeat(100) + "Y".repeat(50); // 50 chars longer
+  const thirdText = "X".repeat(100) + "Y".repeat(50) + "Z".repeat(50); // 100 chars longer
 
   const bot = makeStubBot((method: string, payload: any) => {
     sentTexts.push(payload.text || "");
-    if (!firstCallReceived) {
-      firstCallReceived = true;
+    if (sentTexts.length === 1) {
       // First call: hold until we explicitly resolve
       return new Promise((resolve) => {
         resolveFirstFlush = () => resolve({ ok: true });
@@ -305,35 +365,36 @@ section("C. Serialization / coalescing");
     return Promise.resolve({ ok: true });
   });
 
-  const ds = new DraftStreamer(bot, "serial_test");
+  const ds = new DraftStreamer(bot, "serial_test", { throttleMs: 10 });
 
-  // Trigger a first flush (long enough text, first time → immediate)
-  ds.update("A very long first update text that easily exceeds the forty character minimum threshold by quite a bit.");
-
-  await new Promise((r) => setTimeout(r, 50));
+  // First update → immediate flush (held)
+  ds.update(firstText);
+  await new Promise((r) => setTimeout(r, 30));
   assert(sentTexts.length === 1, "First flush started immediately");
-  assert(firstCallReceived, "First call was received");
 
-  // While first flush is in-flight, add more updates
-  // These set pendingText but won't trigger immediate flushes (throttle guard)
-  ds.update("Second update that is also long enough to be meaningful for our testing purposes.");
-  ds.update("Third and final update that should be the text eventually sent after resolution.");
-
-  // Verify no second call happened (serialization holds)
+  // While the first flush is in-flight, push updates that PASS the throttle
+  // gate (throttleMs=10) → each reaches flush() and coalesces onto the single
+  // in-flight request (no queuing, no concurrent call).
+  ds.update(secondText);
+  ds.update(thirdText);
   assert(sentTexts.length === 1, "No concurrent flush while first is in flight");
 
-  // Now resolve the first flush — this clears the inFlight flag
-  // and the pending text is available for the debounce timer
+  // Resolve the first flush → exactly one coalesced follow-up should fire,
+  // carrying the LATEST (third) snapshot.
   if (resolveFirstFlush) {
     (resolveFirstFlush as () => void)();
   }
   await new Promise((r) => setTimeout(r, 50));
 
-  // The debounce timer hasn't fired yet (1000ms throttle). We verify that:
-  // 1. Serialization was maintained (no concurrent flushes)
-  // 2. The pending text is correctly tracked for later delivery
-  const cleanResult = await ds.finalizeClean();
-  assert(cleanResult !== null, "finalizeClean has accumulated text from latest update");
+  assert(sentTexts.length === 2, `Exactly one coalesced follow-up (got ${sentTexts.length} sends)`);
+  if (sentTexts.length === 2) {
+    assert(sentTexts[1] === thirdText, "Coalesced follow-up carries the latest snapshot");
+  }
+
+  // No further sends after the coalesced one settles
+  const after = sentTexts.length;
+  await new Promise((r) => setTimeout(r, 100));
+  assert(sentTexts.length === after, "No extra sends after the coalesced follow-up");
 }
 
 // C2. No duplicate sends of identical text
@@ -384,35 +445,42 @@ section("D. Deadline / AbortSignal behavior");
   assert(signalReceived?.aborted === false, "Signal is not already aborted (success case)");
 }
 
-// D2. Stub that never resolves → deadline should abort it, streamer stays healthy
+// D2. Injectable deadline: abort fires on a hung draft AND the streamer recovers
+//    (deadline is a test seam via DraftStreamerOptions.draftDeadlineMs)
 {
   resetState();
-  let abortedDueToDeadline = false;
-  let signalReceived: AbortSignal | undefined;
+  let abortedDueToDeadline: boolean = false;
+  let callCount = 0;
 
-  // Keep the flush hanging forever
   const bot = makeStubBot((method: string, payload: any, opts?: any) => {
-    signalReceived = opts?.signal;
-    // Register abort listener
-    signalReceived?.addEventListener('abort', () => {
-      abortedDueToDeadline = true;
-    });
-    // Never resolve
-    return new Promise(() => {});
+    callCount++;
+    // First call: hang forever unless the deadline aborts it. Later calls
+    // (recovery) resolve immediately.
+    if (callCount === 1) {
+      return new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener("abort", () => {
+          abortedDueToDeadline = true;
+          reject(abortError());
+        });
+      });
+    }
+    return Promise.resolve({ ok: true });
   });
 
-  const ds = new DraftStreamer(bot, "deadline_test");
-  ds.update("Long text that should trigger a flush with a deadline timeout.");
+  const ds = new DraftStreamer(bot, "deadline_test", { throttleMs: 10, draftDeadlineMs: 50, transientLimit: 5 });
+  ds.update("Long text that should be aborted by the 50ms draft deadline here.");
 
-  // Wait for deadline to fire (5s is too long for test — we can't actually wait 5s)
-  // Instead, verify the signal was created and passed
+  // Wait past the 50ms deadline
+  await new Promise((r) => setTimeout(r, 120));
+
+  assertTrue(abortedDueToDeadline, "Deadline aborted the hung draft");
+  assert(callCount >= 1, "At least one call was made");
+
+  // Streamer recovers: a fresh update with new text triggers a new flush that succeeds
+  const before = callCount;
+  ds.update("Fresh long text after the abort to prove the streamer recovered just fine.");
   await new Promise((r) => setTimeout(r, 100));
-
-  // The signal should have been passed
-  assert(signalReceived !== undefined, "Signal passed to callApi for deadline test");
-
-  // Note: we can't actually test the 5s deadline in unit tests without slowing tests down.
-  // The integration test validates this end-to-end. We verify the signal is wired.
+  assert(callCount > before, "Streamer recovered and sent a new draft after the abort");
 }
 
 // ===========================================================================
@@ -421,35 +489,39 @@ section("D. Deadline / AbortSignal behavior");
 
 section("E. Per-turn cap");
 
-// E1. Per-turn cap is enforced at the code level as a safety net.
-//    With THROTTLE_MS=1000, we can only trigger ~1-2 flushes in 300ms.
-//    This test verifies the cap constant exists and doesn't crash.
-//    The actual enforcement is in the synchronous guard inside flush().
+// E1. Per-turn cap actually enforced: drive 31+ flushes and assert the 31st is
+//    suppressed with a single log. Uses an injectable tiny throttle so each
+//    update passes the throttle gate and reaches its own flush.
 {
   resetState();
   const sentPayloads: any[] = [];
+  let capLogCount = 0;
+  const originalWarn = console.warn;
+  console.warn = (msg?: any, ...args: any[]) => {
+    if (typeof msg === "string" && msg.includes("Per-turn cap")) capLogCount++;
+    originalWarn(msg, ...args);
+  };
 
-  const bot = makeStubBot((method: string, payload: any) => {
-    sentPayloads.push(payload);
-    return Promise.resolve({ ok: true });
-  });
+  try {
+    const bot = makeStubBot((method: string, payload: any) => {
+      sentPayloads.push(payload);
+      return Promise.resolve({ ok: true });
+    });
 
-  const ds = new DraftStreamer(bot, "cap_test");
+    const ds = new DraftStreamer(bot, "cap_test", { throttleMs: 5 });
 
-  // Send updates spaced far enough apart to trigger individual flushes
-  for (let i = 0; i < 3; i++) {
-    ds.update(`Update number ${i} with enough text to pass the delta threshold. Extra padding here for the test.`);
-    await new Promise((r) => setTimeout(r, 1100)); // wait for THROTTLE_MS (1000ms)
+    // 31 updates, each ≥40 chars longer than the previous so every one passes
+    // MIN_CHARS_DELTA and (with the 5ms throttle) triggers its own flush.
+    for (let i = 0; i < 31; i++) {
+      ds.update(`Update ${i} — ` + "P".repeat(80 + i * 50));
+      await new Promise((r) => setTimeout(r, 15));
+    }
+
+    assert(sentPayloads.length === 30, `Exactly 30 flushes sent, 31st suppressed (got ${sentPayloads.length})`);
+    assert(capLogCount === 1, `Cap warning logged exactly once (got ${capLogCount})`);
+  } finally {
+    console.warn = originalWarn;
   }
-
-  // At least some flushes should have happened
-  assert(sentPayloads.length >= 1, `At least 1 flush happened (got ${sentPayloads.length})`);
-  assert(sentPayloads.length <= 35, `Not more than cap+margin (got ${sentPayloads.length})`);
-
-  // Verify MAX_FLUSHES_PER_TURN constant is defined and reasonable
-  // by checking that the cap equals the expected value (30)
-  // We verify this by asserting the behavior: 3 updates in 3+ seconds triggered at most 3 flushes
-  assert(sentPayloads.length <= 30, `Cap would prevent >30 (got ${sentPayloads.length})`);
 }
 
 // ===========================================================================
@@ -576,6 +648,176 @@ section("F. Invariant regressions");
   ds.stop();
   const result = await ds.finalizeClean();
   assertEq(result, null, "Empty draft → null");
+}
+
+// ===========================================================================
+// G. Finalize vs in-flight race (fix A)
+// ===========================================================================
+
+section("G. Finalize vs in-flight race (fix A)");
+
+// G1. finalizeClean aborts a hung in-flight draft and sends the final message;
+//    no draft may land after the final send.
+{
+  resetState();
+  let draftAborted: boolean = false;
+  let draftCallCount = 0;
+  let sendMessageCount = 0;
+
+  const bot: any = {
+    telegram: {
+      sendMessage: async (_chatId: string | number, _text: string, _opts?: any) => {
+        sendMessageCount++;
+        return { message_id: 42 };
+      },
+      callApi: (method: string, payload: any, opts?: any) => {
+        if (method === "sendMessageDraft") {
+          draftCallCount++;
+          // Hang forever unless the signal aborts it (like real node-fetch)
+          return new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => {
+              draftAborted = true;
+              reject(abortError());
+            });
+          });
+        }
+        return Promise.resolve({ ok: true });
+      },
+    },
+  };
+
+  const ds = new DraftStreamer(bot, "race_test", { throttleMs: 10, finalizeSettleMs: 200 });
+  ds.update("Long text that triggers an in-flight draft for the finalize race test.");
+  await new Promise((r) => setTimeout(r, 50));
+  assert(draftCallCount === 1, "Draft is in-flight");
+  assert(draftAborted === false, "Draft not aborted yet");
+
+  const result = await ds.finalizeClean();
+  assert(result === 42, "finalizeClean returns message_id even with an in-flight draft");
+  assertTrue(draftAborted, "In-flight draft was aborted by finalization (no stale draft can land after)");
+  assert(sendMessageCount === 1, "Final sendMessage happened");
+
+  // No draft may be sent after finalization
+  const countAfterFinalize = draftCallCount;
+  await new Promise((r) => setTimeout(r, 100));
+  assert(draftCallCount === countAfterFinalize, "No draft sent after finalize");
+}
+
+// G2. stop() suppresses the coalesced follow-up (main path: stop before final send)
+{
+  resetState();
+  const sentTexts: string[] = [];
+  let resolveFirstFlush: (() => void) | null = null;
+
+  const bot = makeStubBot((method: string, payload: any) => {
+    sentTexts.push(payload.text || "");
+    if (sentTexts.length === 1) {
+      return new Promise((resolve) => {
+        resolveFirstFlush = () => resolve({ ok: true });
+      });
+    }
+    return Promise.resolve({ ok: true });
+  });
+
+  const ds = new DraftStreamer(bot, "stop_coalesce_test", { throttleMs: 10 });
+  ds.update("X".repeat(100));
+  await new Promise((r) => setTimeout(r, 30));
+  ds.update("X".repeat(100) + "Y".repeat(50)); // would coalesce onto the in-flight flush
+
+  // Stop as the main path does before the final send — while a flush is in-flight
+  ds.stop();
+
+  // Resolve the in-flight flush → the coalesced follow-up must be suppressed
+  if (resolveFirstFlush) {
+    (resolveFirstFlush as () => void)();
+  }
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert(sentTexts.length === 1, `No coalesced draft after stop() (got ${sentTexts.length} sends)`);
+}
+
+// ===========================================================================
+// H. Additional behaviors (review 1407108)
+// ===========================================================================
+
+section("H. Additional behaviors");
+
+// H1. content-400 → raw-text retry inside executeDraftSend
+{
+  resetState();
+  const calls: Array<{ method: string; payload: any }> = [];
+  const rawText = "Long text with *markdown* that fails parse then retries as plain.";
+
+  const bot = makeStubBot((method: string, payload: any) => {
+    calls.push({ method, payload });
+    if (calls.length === 1) {
+      throw tgError(400, "Bad Request: can't parse entities");
+    }
+    return Promise.resolve({ ok: true });
+  });
+
+  const ds = new DraftStreamer(bot, "content_retry_test", { throttleMs: 10 });
+  ds.update(rawText);
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert(calls.length === 2, `Raw retry happened (got ${calls.length} calls)`);
+  if (calls.length === 2) {
+    assert(calls[0].payload.parse_mode === "HTML", "First attempt uses HTML parse_mode");
+    assert(calls[1].payload.parse_mode === undefined, "Retry drops parse_mode");
+    assert(calls[1].payload.text === rawText, "Retry sends raw (unconverted) text");
+  }
+}
+
+// H2. TRANSIENT_LIMIT soft-stop: after N consecutive transients, drafts disabled
+{
+  resetState();
+  let callCount = 0;
+
+  const bot = makeStubBot(() => {
+    callCount++;
+    throw fetchError("ETIMEDOUT");
+  });
+
+  const ds = new DraftStreamer(bot, "transient_limit_test", { throttleMs: 10, transientLimit: 3 });
+
+  // Drive 5 updates; after the 3rd consecutive transient, drafts must soft-stop.
+  for (let i = 0; i < 5; i++) {
+    ds.update(`Update ${i} with enough long text to trigger a flush every single time. ` + "Q".repeat(60 + i * 50));
+    await new Promise((r) => setTimeout(r, 30));
+  }
+
+  assert(callCount === 3, `Soft-stop after 3 consecutive transients (got ${callCount} calls)`);
+}
+
+// H3. Final delivery independence: finalizeClean succeeds while chat is in 429 cooldown
+{
+  resetState();
+  _getChatCooldowns().set("cooldown_final", { until: Date.now() + 100000 }); // long cooldown
+
+  const bot = makeStubBot(() => {
+    throw new Error("Draft should never fire while in cooldown");
+  });
+
+  const ds = new DraftStreamer(bot, "cooldown_final", { throttleMs: 10 });
+  ds.update("Long text that should be suppressed by cooldown for the draft path.");
+  await new Promise((r) => setTimeout(r, 50));
+
+  // Draft suppressed, but finalizeClean must still deliver the final message
+  const result = await ds.finalizeClean();
+  assert(result === 42, "finalizeClean sends the final message during 429 cooldown");
+}
+
+// H4. Lazy cooldown pruning: expired entries are deleted by isInCooldown()
+{
+  resetState();
+  _getChatCooldowns().set("prune_test", { until: Date.now() - 100 }); // already expired
+
+  const bot = makeStubBot(() => Promise.resolve({ ok: true }));
+  const ds = new DraftStreamer(bot, "prune_test", { throttleMs: 10 });
+  ds.update("Long text that triggers a flush and lazy-prunes the expired cooldown entry.");
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert(!_getChatCooldowns().has("prune_test"), "Expired cooldown entry pruned by isInCooldown");
 }
 
 // ===========================================================================

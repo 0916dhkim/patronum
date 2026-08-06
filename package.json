@@ -9,6 +9,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "agentkeepalive": "^4.6.0",
     "better-sqlite3": "^11.7.0",
     "marked": "^17.0.5",
     "smol-toml": "^1.6.1",
