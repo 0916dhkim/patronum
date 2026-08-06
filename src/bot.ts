@@ -195,6 +195,22 @@ export async function startBot(): Promise<void> {
   });
   setBot(bot);
   const BOT_START_TIME = Math.floor(Date.now() / 1000);
+  // -------------------------------------------------------------------
+  // Idle-socket eviction on the shared https.Agent (plan §3.3)
+  // Node 22's https.Agent supports freeSocketTimeout to evict idle free
+  // sockets that have been in the pool unused for too long. This prevents
+  // dead-socket reuse on flaky paths (home WiFi, NAT conntrack drops)
+  // without touching in-flight sockets (getUpdates long-poll is fine).
+  // -------------------------------------------------------------------
+  {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const botOptions = (bot.telegram as any).options as Record<string, any>;
+    if (botOptions.agent) {
+      botOptions.agent.freeSocketTimeout = 20000;
+      console.log("[agent] Applied freeSocketTimeout=20000ms for idle-socket eviction");
+    }
+  }
+
 
   // -------------------------------------------------------------------
   // Wire up the spawn callback so spawn_agent tool can trigger bg work

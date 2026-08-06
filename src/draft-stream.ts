@@ -1,10 +1,163 @@
 import { Telegraf } from "telegraf";
 import { markdownToTelegramHtml } from "./format.js";
 
+// ---------------------------------------------------------------------------
+// Error classification
+// ---------------------------------------------------------------------------
+
+export type DraftErrorClass =
+  | { type: "rate_limited"; retryAfter: number; original: unknown }
+  | { type: "transient_network"; original: unknown }
+  | { type: "content_error"; original: unknown }
+  | { type: "permanent_disable"; original: unknown }
+  | { type: "unknown"; original: unknown };
+
+/**
+ * Classify a draft-flush error according to the streaming-fix architecture.
+ *
+ * Rate-limited:       TelegramError 429 (with optional retry_after)
+ * Transient network:  node-fetch system errors (ETIMEDOUT, ECONNRESET, socket hang up, DNS)
+ *                     or AbortError (deadline expiration)
+ * Content error:      400 with "can't parse entities" or similar parse failure
+ * Permanent:          403, 404, "method not found", bad draft_id
+ * Unknown:            anything else (safe fallback: treat as transient)
+ */
+export function classifyDraftError(err: unknown): DraftErrorClass {
+  // TelegramError from telegraf (has response.error_code)
+  const tgErr = err as any;
+  if (tgErr?.response?.error_code) {
+    const code = tgErr.response.error_code;
+    const description = (tgErr.response.description || "").toLowerCase();
+
+    if (code === 429) {
+      // Rate limited — extract retry_after
+      const retryAfter =
+        tgErr.response.parameters?.retry_after ??
+        tgErr.parameters?.retry_after ??
+        3; // default 3s if not specified
+      return { type: "rate_limited", retryAfter: Math.max(1, retryAfter), original: err };
+    }
+
+    if (code === 400) {
+      // Content error if parse-related
+      if (
+        description.includes("can't parse entities") ||
+        description.includes("entity") ||
+        description.includes("parse") ||
+        description.includes("unable to parse")
+      ) {
+        return { type: "content_error", original: err };
+      }
+      // "Bad Request: method not found" or similar → permanent
+      if (
+        description.includes("method not found") ||
+        description.includes("method is not available") ||
+        description.includes("not supported") ||
+        description.includes("draft_id")
+      ) {
+        return { type: "permanent_disable", original: err };
+      }
+      // Other 400s — conservative: treat as content error to avoid permanent disable
+      return { type: "content_error", original: err };
+    }
+
+    if (code === 403 || code === 404) {
+      return { type: "permanent_disable", original: err };
+    }
+
+    // Other HTTP errors (5xx etc) — transient
+    return { type: "transient_network", original: err };
+  }
+
+  // FetchError or TypeError from node-fetch / native fetch
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+
+    // AbortError from AbortController
+    if (err.name === "AbortError" || msg.includes("abort") || msg.includes("the operation was aborted")) {
+      return { type: "transient_network", original: err };
+    }
+
+    // node-fetch system errors
+    const fetchErr = err as any;
+    if (
+      fetchErr.type === "system" ||
+      fetchErr.code === "ETIMEDOUT" ||
+      fetchErr.code === "ECONNRESET" ||
+      fetchErr.code === "ECONNREFUSED" ||
+      fetchErr.code === "ENOTFOUND" ||
+      fetchErr.code === "EPIPE" ||
+      fetchErr.errno === "ETIMEDOUT" ||
+      fetchErr.errno === "ECONNRESET" ||
+      msg.includes("econnreset") ||
+      msg.includes("etimedout") ||
+      msg.includes("fetch failed") ||
+      msg.includes("socket hang up") ||
+      msg.includes("network error") ||
+      msg.includes("request timed out") ||
+      msg.includes("reason:")
+    ) {
+      return { type: "transient_network", original: err };
+    }
+
+    // Generic Error with no special classification — be safe, treat as transient
+    return { type: "transient_network", original: err };
+  }
+
+  // Non-Error throw (unusual)
+  return { type: "unknown", original: err };
+}
+
+// ---------------------------------------------------------------------------
+// Per-chat cooldown state (module-scoped, survives across DraftStreamer instances)
+// ---------------------------------------------------------------------------
+
+interface CooldownState {
+  until: number; // epoch ms
+}
+
+const chatCooldowns = new Map<string, CooldownState>();
+
+/**
+ * Export for testing: allows tests to inspect/inject cooldown state.
+ */
+export function _getChatCooldowns(): Map<string, CooldownState> {
+  return chatCooldowns;
+}
+
+/**
+ * Export for testing: allows tests to reset cooldown state between test runs.
+ */
+export function _resetChatCooldowns(): void {
+  chatCooldowns.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Token redaction helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Redact Telegram bot tokens from strings (URLs, error messages).
+ * Matches /bot<number>:<token>/ or /user<number>:<token>/ patterns.
+ */
+function redactToken(text: string): string {
+  return text.replace(/\/(bot|user)(\d+):[^/]+\//g, "/$1$2:[REDACTED]/");
+}
+
+// ---------------------------------------------------------------------------
+// DraftStreamer
+// ---------------------------------------------------------------------------
+
 /**
  * Manages throttled Telegram draft message updates.
  * Uses `sendMessageDraft` to show partial streamed text to the user
  * as it arrives, then gets replaced by the final formatted message.
+ *
+ * Error handling (per streaming-fix architecture):
+ * - 429: honor retry_after, per-chat cooldown survives across turns
+ * - Transient network: skip/retry once (next flush carries full text, lossless)
+ * - Content 400: retry raw text once
+ * - 403/404/bad-draft_id: disable for the turn
  */
 export class DraftStreamer {
   private draftId: number;
@@ -12,11 +165,24 @@ export class DraftStreamer {
   private pendingText: string = "";
   private lastSendTime: number = 0;
   private flushTimer: NodeJS.Timeout | null = null;
-  private failed: boolean = false;
+  private disabled: boolean = false;
   private finalized: boolean = false;
 
-  private static readonly THROTTLE_MS = 300;
-  private static readonly MIN_CHARS_DELTA = 40;
+  /** Promise tracking the current in-flight flush (for serialization) */
+  private inFlightPromise: Promise<void> | null = null;
+  /** If true, schedule one follow-up flush after the current in-flight one completes */
+  private coalesceAfterFlush: boolean = false;
+
+  /** Number of flushes sent this turn (capped by MAX_FLUSHES_PER_TURN) */
+  private flushCountThisTurn: number = 0;
+  /** Consecutive transient- or content-error failures (soft-stop at limit) */
+  private consecutiveTransients: number = 0;
+
+  private static readonly THROTTLE_MS = 1000;       // raised from 300ms per plan §3.2
+  private static readonly MIN_CHARS_DELTA = 40;      // unchanged
+  private static readonly MAX_FLUSHES_PER_TURN = 30; // hard cap per §3.2
+  private static readonly DRAFT_DEADLINE_MS = 5000;  // 5s abort deadline per §3.3
+  private static readonly TRANSIENT_LIMIT = 5;       // consecutive transients → soft-stop
 
   constructor(
     private bot: Telegraf,
@@ -30,10 +196,27 @@ export class DraftStreamer {
   }
 
   /**
+   * Return the string chat ID for cooldown lookups.
+   */
+  private get chatIdStr(): string {
+    return String(this.chatId);
+  }
+
+  /**
+   * Return true if this chat is currently in cooldown (429-based rate limiting).
+   */
+  private isInCooldown(): boolean {
+    const cd = chatCooldowns.get(this.chatIdStr);
+    return cd !== undefined && Date.now() < cd.until;
+  }
+
+  /**
    * Update the pending text. Triggers a flush if:
-   * - Enough time has elapsed since last send (THROTTLE_MS), OR
+   * - Enough time has elapsed since last send (THROTTLE_MS), AND
    * - Enough new characters have accumulated (MIN_CHARS_DELTA)
    * No-op if already finalized.
+   *
+   * Synchronous and non-blocking (invariant I1 from the plan).
    */
   update(fullText: string): void {
     if (this.finalized) return;
@@ -46,15 +229,18 @@ export class DraftStreamer {
     const charsDelta = fullText.length - this.lastSentText.length;
 
     if (timeSinceLastSend >= DraftStreamer.THROTTLE_MS && charsDelta >= DraftStreamer.MIN_CHARS_DELTA) {
+      // Fire async — do not await (I1: update() stays sync)
       this.flush().catch((err) => {
-        console.warn("[draft] Flush failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[draft] Flush failed: ${redactToken(msg)}`);
       });
     } else if (!this.flushTimer) {
       // Set a debounce timer to flush after THROTTLE_MS
       this.flushTimer = setTimeout(() => {
         this.flushTimer = null;
         this.flush().catch((err) => {
-          console.warn("[draft] Debounced flush failed:", err);
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[draft] Debounced flush failed: ${redactToken(msg)}`);
         });
       }, DraftStreamer.THROTTLE_MS);
     }
@@ -69,6 +255,8 @@ export class DraftStreamer {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
+    // Note: does NOT abort an in-flight flush — the coalesced follow-up
+    // will be skipped because finalized is checked at fire time (I7).
   }
 
   /**
@@ -162,44 +350,237 @@ export class DraftStreamer {
 
   /**
    * Actually send the draft to Telegram.
-   * Converts markdown to Telegram HTML before sending.
-   * Falls back to raw text if conversion fails on partial markdown.
+   * Handles serialization, coalescing, deadlines, error classification,
+   * cooldown, per-turn cap, and content-error retry.
    */
   private async flush(): Promise<void> {
-    if (this.failed) return;
+    // ── Guard checks (synchronous) ──
+    if (this.disabled) return;
+    if (this.finalized) return;
     if (this.pendingText === this.lastSentText) return;
     if (this.pendingText.length === 0) return;
 
-    this.lastSentText = this.pendingText;
+    // Per-turn cap (I9)
+    if (this.flushCountThisTurn >= DraftStreamer.MAX_FLUSHES_PER_TURN) {
+      if (this.flushCountThisTurn === DraftStreamer.MAX_FLUSHES_PER_TURN) {
+        this.flushCountThisTurn++; // log only once
+        console.warn(`[draft] Per-turn cap (${DraftStreamer.MAX_FLUSHES_PER_TURN}) reached for chat=${this.chatId}`);
+      }
+      return;
+    }
+
+    // Shared cooldown check (across turns via module-level Map)
+    if (this.isInCooldown()) {
+      return;
+    }
+
+    // ── Serialization / coalescing (I7) ──
+    if (this.inFlightPromise) {
+      // A flush is already in flight. Don't queue — coalesce: just remember
+      // that new text arrived so we send exactly one follow-up after this
+      // one settles with the latest pendingText.
+      this.coalesceAfterFlush = true;
+      return;
+    }
+
+    // ── Prepare the draft payload ──
+    const textToSend = this.pendingText;
+    this.lastSentText = textToSend;
     this.lastSendTime = Date.now();
+    this.flushCountThisTurn++;
 
     // Try to convert markdown to Telegram HTML for rich-text drafts.
     // If conversion throws (e.g. malformed partial markdown), fall back to raw text.
-    let text: string;
+    let draftText: string;
     let parseMode: string | undefined;
 
     try {
-      text = markdownToTelegramHtml(this.pendingText);
+      draftText = markdownToTelegramHtml(textToSend);
       parseMode = "HTML";
     } catch {
-      text = this.pendingText;
+      draftText = textToSend;
       parseMode = undefined;
     }
 
+    // ── Deadline (AbortSignal, §3.3) ──
+    const abortController = new AbortController();
+    const deadlineTimer = setTimeout(() => {
+      abortController.abort();
+    }, DraftStreamer.DRAFT_DEADLINE_MS);
+
+    // ── Build the promise chain (set inFlightPromise BEFORE first await) ──
+    const flushPromise = this.executeDraftSend(draftText, textToSend, parseMode, abortController)
+      .then(() => {
+        // Success: reset transient counter
+        this.consecutiveTransients = 0;
+      })
+      .catch((err: unknown) => {
+        this.handleFlushError(err, draftText, textToSend);
+      })
+      .finally(() => {
+        clearTimeout(deadlineTimer);
+        this.inFlightPromise = null;
+
+        // Coalesced follow-up: if new text arrived while we were sending,
+        // fire exactly one more flush with the latest pendingText.
+        if (this.coalesceAfterFlush && !this.finalized && !this.disabled) {
+          this.coalesceAfterFlush = false;
+          // Use setTimeout to avoid synchronous stack buildup
+          setTimeout(() => {
+            this.flush().catch((e) => {
+              const msg = e instanceof Error ? e.message : String(e);
+              console.warn(`[draft] Coalesced flush failed: ${redactToken(msg)}`);
+            });
+          }, 0);
+        }
+      });
+
+    // Set in-flight marker BEFORE any async work completes (I7)
+    this.inFlightPromise = flushPromise;
+  }
+
+  /**
+   * Execute the actual callApi for sendMessageDraft.
+   * On content error (400 parse failure), retries once as plain text.
+   */
+  private async executeDraftSend(
+    draftText: string,
+    rawText: string,
+    parseMode: string | undefined,
+    abortController: AbortController
+  ): Promise<void> {
+    const params: Record<string, unknown> = {
+      chat_id: this.chatId,
+      draft_id: this.draftId,
+      text: draftText,
+    };
+
+    // First attempt: with parse_mode if available
+    if (parseMode) {
+      params.parse_mode = parseMode;
+    }
+
     try {
-      const params: Record<string, unknown> = {
-        chat_id: this.chatId,
-        draft_id: this.draftId,
-        text,
-      };
-      if (parseMode) {
-        params.parse_mode = parseMode;
-      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.bot.telegram as any).callApi("sendMessageDraft", params);
-    } catch (err) {
-      console.warn("[draft] sendMessageDraft not supported or failed, disabling:", err);
-      this.failed = true;
+      await (this.bot.telegram as any).callApi("sendMessageDraft", params, {
+        signal: abortController.signal,
+      });
+      return;
+    } catch (firstErr) {
+      // Check if this is a content error and we should retry as plain text
+      const classification = classifyDraftError(firstErr);
+      if (classification.type === "content_error" && parseMode) {
+        // Retry once without parse_mode
+        console.warn(`[draft] Content error — retrying as plain text: ${formatErrorForLog(firstErr)}`);
+        const retryParams: Record<string, unknown> = {
+          chat_id: this.chatId,
+          draft_id: this.draftId,
+          text: rawText, // use original markdown text
+        };
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (this.bot.telegram as any).callApi("sendMessageDraft", retryParams, {
+            signal: abortController.signal,
+          });
+          return; // retry succeeded
+        } catch (retryErr) {
+          // Retry also failed — re-throw the original error for classification
+          throw retryErr;
+        }
+      }
+      // Re-throw for handleFlushError
+      throw firstErr;
     }
   }
+
+  /**
+   * Handle a flush error by classification.
+   * Must not throw (catches all errors internally).
+   */
+  private handleFlushError(
+    err: unknown,
+    attemptedHtml?: string,
+    attemptedRaw?: string
+  ): void {
+    const classification = classifyDraftError(err);
+
+    // Get a safe string for logging (token-redacted)
+    const errStr = formatErrorForLog(err);
+
+    switch (classification.type) {
+      case "rate_limited": {
+        console.warn(
+          `[draft] Rate limited (429) — cooldown ${classification.retryAfter}s for chat=${this.chatId}: ${errStr}`
+        );
+        // Set per-chat cooldown (survives across DraftStreamer instances)
+        const until = Date.now() + classification.retryAfter * 1000;
+        chatCooldowns.set(this.chatIdStr, { until });
+        // Reset lastSentText so the next flush carries full text (lossless)
+        this.lastSentText = "";
+        break;
+      }
+
+      case "transient_network": {
+        this.consecutiveTransients++;
+        console.warn(
+          `[draft] Transient network error (${this.consecutiveTransients}/${DraftStreamer.TRANSIENT_LIMIT}) for chat=${this.chatId}: ${errStr}`
+        );
+        // Reset lastSentText so the next flush carries full text (lossless)
+        this.lastSentText = "";
+        if (this.consecutiveTransients >= DraftStreamer.TRANSIENT_LIMIT) {
+          this.disabled = true;
+          console.warn(
+            `[draft] ${this.consecutiveTransients} consecutive transient errors — soft-stopping drafts for chat=${this.chatId} (this turn)`
+          );
+        }
+        break;
+      }
+
+      case "content_error": {
+        console.warn(
+          `[draft] Content error — raw retry result for chat=${this.chatId}: ${errStr}`
+        );
+        // We already attempted the raw-text retry in executeDraftSend.
+        // If it also failed, treat as transient (skip, lossless).
+        this.lastSentText = "";
+        this.consecutiveTransients++;
+        if (this.consecutiveTransients >= DraftStreamer.TRANSIENT_LIMIT) {
+          this.disabled = true;
+          console.warn(
+            `[draft] ${this.consecutiveTransients} consecutive errors — soft-stopping drafts for chat=${this.chatId} (this turn)`
+          );
+        }
+        break;
+      }
+
+      case "permanent_disable": {
+        console.warn(
+          `[draft] Permanent error — disabling drafts for chat=${this.chatId} (this turn): ${errStr}`
+        );
+        this.disabled = true;
+        break;
+      }
+
+      default: {
+        // Unknown: safe default, treat as transient
+        console.warn(
+          `[draft] Unknown error — treating as transient for chat=${this.chatId}: ${errStr}`
+        );
+        this.lastSentText = "";
+        this.consecutiveTransients++;
+        if (this.consecutiveTransients >= DraftStreamer.TRANSIENT_LIMIT) {
+          this.disabled = true;
+        }
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Format an error for logging: redact tokens from the message string.
+ */
+function formatErrorForLog(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return redactToken(msg).slice(0, 300);
 }
