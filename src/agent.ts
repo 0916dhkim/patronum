@@ -461,6 +461,19 @@ function sanitizeMessages(messages: Message[]): Message[] {
       }
     }
 
+    // Drop assistant messages with no content blocks. OpenAI-compatible
+    // providers (OpenRouter/DeepSeek) reject requests containing an empty
+    // assistant message, so a single empty reply persisted in history bricks
+    // the chat with 400s on every subsequent turn.
+    if (
+      msg.role === "assistant" &&
+      ((Array.isArray(msg.content) && msg.content.length === 0) ||
+        (typeof msg.content === "string" && msg.content.trim() === ""))
+    ) {
+      console.warn(`[sanitize] Dropping empty assistant message at index ${i} — no content blocks`);
+      continue;
+    }
+
     // Check assistant messages that contain tool_use blocks — ensure the
     // next message provides matching tool_results. Orphaned tool_use blocks
     // (no tool_result follows) also cause 400 errors from the Claude API.

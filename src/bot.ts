@@ -21,6 +21,21 @@ import type { Message } from "./types.js";
 
 const TELEGRAM_MSG_LIMIT = 4096;
 
+// A turn can finish with only reasoning output, leaving an assistant message
+// with no content blocks once thinking is stripped. Persisting it would make
+// OpenAI-compatible providers reject every later request (400: "content or
+// tool_calls must be set"), so treat it as empty wherever history is built.
+function isEmptyAssistantMessage(msg: Message): boolean {
+  if (msg.role !== "assistant") return false;
+  const content = Array.isArray(msg.content)
+    ? stripThinkingBlocks(msg.content)
+    : msg.content;
+  return (
+    (Array.isArray(content) && content.length === 0) ||
+    (typeof content === "string" && content.trim() === "")
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Per-chat event queue types
 // ---------------------------------------------------------------------------
@@ -892,8 +907,10 @@ async function handleEvent(
 
   try {
 
-  // Load session history
-  const history = loadHistory(chatId);
+  // Load session history, dropping empty assistant messages. A turn that
+  // produced only reasoning leaves an empty assistant message behind, and
+  // OpenAI-compatible providers reject the next request that contains one.
+  const history = loadHistory(chatId).filter((m) => !isEmptyAssistantMessage(m));
 
   // Extra context blocks to inject into the system prompt (not user message content)
   const extraContext: string[] = [];
@@ -1025,7 +1042,22 @@ async function handleEvent(
     // on send failure the text must reappear in the final message (no data loss).
     const flushedCount = flushedMessageId != null ? flushedAssistantCount : 0;
 
-    const { messages: newMessages, inputTokens, earlyTermination } = agentResult;
+    const { messages: newMessagesRaw, inputTokens, earlyTermination } = agentResult;
+
+    // Drop assistant messages that ended up with no content blocks (a turn that
+    // produced only reasoning). Persisting one would brick the chat with 400s.
+    const newMessages = newMessagesRaw.filter((m) => !isEmptyAssistantMessage(m));
+
+    if (newMessages.length < newMessagesRaw.length) {
+      console.warn(
+        `[handleEvent] Dropped ${newMessagesRaw.length - newMessages.length} empty assistant message(s) in chat=${chatId}`
+      );
+      await bot.telegram
+        .sendMessage(chatId, "⚠️ The model returned an empty response (no content). Please resend your message.")
+        .catch((err) =>
+          console.warn(`[handleEvent] Failed to send empty-response notice in chat=${chatId}:`, err)
+        );
+    }
 
     // Store the last-known input token count on the chat state for status visibility
     state.lastInputTokens = inputTokens;
@@ -1201,6 +1233,10 @@ async function handleEvent(
         if (partialMessages.length > 0) {
           console.log(`[steer] Saving ${partialMessages.length} partial message(s) to DB`);
           for (const msg of partialMessages) {
+            if (isEmptyAssistantMessage(msg)) {
+              console.warn(`[steer] Skipping empty partial assistant message in chat=${chatId}`);
+              continue;
+            }
             const messageToPersist: Message = {
               ...msg,
               content: Array.isArray(msg.content)
