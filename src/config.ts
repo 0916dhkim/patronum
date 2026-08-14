@@ -6,6 +6,7 @@ export interface Config {
   telegramBotToken: string;
   claudeToken: string;
   claudeModel: string;
+  reasoningEffort?: string;
   openrouterApiKey: string;
   workspace: string;
   ownerChatId: string;
@@ -31,6 +32,7 @@ export const config: Config = {
   telegramBotToken: "",
   claudeToken: "",
   claudeModel: "",
+  reasoningEffort: undefined,
   openrouterApiKey: "",
   workspace: "",
   ownerChatId: "",
@@ -58,6 +60,7 @@ export async function initConfig(): Promise<void> {
   const credentials = getRequiredTable(data, "credentials", tomlPath);
 
   config.claudeModel = getOptionalString(patronum, "patronum.model", "model", tomlPath) ?? "claude-sonnet-4-6";
+  config.reasoningEffort = getOptionalString(patronum, "patronum.reasoning_effort", "reasoning_effort", tomlPath);
   config.ownerChatId = getOptionalString(patronum, "patronum.owner_chat_id", "owner_chat_id", tomlPath) ?? "";
   config.claudeToken = getRequiredString(credentials, "credentials.claude_token", "claude_token", tomlPath);
   config.telegramBotToken = getRequiredString(credentials, "credentials.telegram_bot_token", "telegram_bot_token", tomlPath);

@@ -41,6 +41,7 @@ const LOCAL_CONTEXT_WINDOWS: Record<string, number> = {
   "z-ai/glm-5.2": 1_048_576,
   "deepseek/deepseek-v4-flash": 1_048_576,
   "deepseek/deepseek-v4-pro": 1_048_576,
+  "deepseek/deepseek-v4-pro-0813": 1_048_576,
   "moonshotai/kimi-k3": 1_048_576,
   "minimax/minimax-m3": 1_048_576,
   "google/gemini-3.5-flash": 1_048_576,

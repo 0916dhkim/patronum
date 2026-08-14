@@ -1028,6 +1028,7 @@ async function handleEvent(
         workspace: config.workspace,
         thinking: true,
         extraContext: extraContext.length > 0 ? extraContext : undefined,
+        reasoningEffort: config.reasoningEffort,
       },
       streamController.signal
     );
