@@ -1,29 +1,53 @@
 import type { ToolHandler } from "../types.js";
 import { config } from "../config.js";
 
-const SEARXNG_BASE = "https://searxng.probablydanny.com";
+const KAGI_BASE = "https://kagi.com/api/v1/search";
 const TIMEOUT_MS = 10_000;
 const MAX_RESULTS = 10;
 
-interface SearxngResult {
-  title?: string;
+type Workflow = "search" | "images" | "videos" | "news" | "podcasts";
+
+// Response key used for results varies by workflow (singular for media types).
+const WORKFLOW_DATA_KEY: Record<Workflow, string> = {
+  search: "search",
+  images: "image",
+  videos: "video",
+  news: "news",
+  podcasts: "podcast",
+};
+
+interface KagiItem {
   url?: string;
-  content?: string;
-  engine?: string;
-  score?: number;
+  title?: string;
+  snippet?: string;
+  image?: { url?: string };
+  published?: string;
 }
 
-interface SearxngResponse {
-  results?: SearxngResult[];
-  suggestions?: string[];
-  query?: string;
+interface KagiResponse {
+  meta?: { trace?: string; ms?: number };
+  data?: Record<string, unknown> | null;
+  errors?: Array<{ code?: string; message?: string }>;
+}
+
+function stripHtml(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export const searchTool: ToolHandler = {
   definition: {
     name: "search",
     description:
-      "Search the web using a self-hosted SearXNG instance. Use this to find current information, look up topics, research questions.",
+      "Search the web using the Kagi Search API. Use this to find current information, look up topics, research questions.",
     input_schema: {
       type: "object",
       properties: {
@@ -31,14 +55,11 @@ export const searchTool: ToolHandler = {
           type: "string",
           description: "The search query",
         },
-        categories: {
+        workflow: {
           type: "string",
+          enum: ["search", "images", "videos", "news", "podcasts"],
           description:
-            'Search categories e.g. "general", "news", "science" — defaults to "general"',
-        },
-        pageno: {
-          type: "integer",
-          description: "Page number, defaults to 1",
+            'Type of results: "search" (web), "images", "videos", "news", or "podcasts" — defaults to "search"',
         },
       },
       required: ["query"],
@@ -46,47 +67,68 @@ export const searchTool: ToolHandler = {
   },
 
   async execute(input): Promise<string> {
-    const query = input.query as string;
-    const categories = (input.categories as string) || "general";
-    const pageno = (input.pageno as number) || 1;
+    const query = typeof input.query === "string" ? input.query.trim() : "";
+    if (!query) return "Search unavailable: empty query";
 
-    const params = new URLSearchParams({
-      q: query,
-      format: "json",
-      categories,
-      pageno: String(pageno),
-    });
+    const workflow = (input.workflow as Workflow) || "search";
+    const validWorkflows: Workflow[] = ["search", "images", "videos", "news", "podcasts"];
+    const effectiveWorkflow = validWorkflows.includes(workflow) ? workflow : "search";
 
-    if (config.searxngToken) {
-      params.append("token", config.searxngToken);
+    if (!config.kagiToken) {
+      return "Search unavailable: no Kagi API token configured";
     }
 
-    const url = `${SEARXNG_BASE}/search?${params}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-      const response = await fetch(url, {
+      const response = await fetch(KAGI_BASE, {
+        method: "POST",
         signal: controller.signal,
         headers: {
+          Authorization: `Bearer ${config.kagiToken}`,
+          "Content-Type": "application/json",
           Accept: "application/json",
         },
+        body: JSON.stringify({ query, workflow: effectiveWorkflow }),
       });
 
       clearTimeout(timeout);
 
+      let data: KagiResponse | null = null;
+      try {
+        data = (await response.json()) as KagiResponse;
+      } catch {
+        // Non-JSON error body; fall through with status text
+      }
+
       if (!response.ok) {
+        const detail = data?.errors?.[0]?.message;
+        const code = data?.errors?.[0]?.code;
+        if (detail) {
+          return `Search unavailable: ${response.status} ${response.statusText} — ${detail}`;
+        }
+        if (code) {
+          return `Search unavailable: ${response.status} ${response.statusText} (${code})`;
+        }
         return `Search unavailable: server returned ${response.status} ${response.statusText}`;
       }
 
-      const data = (await response.json()) as SearxngResponse;
-      const results = data.results || [];
+      const dataKey = WORKFLOW_DATA_KEY[effectiveWorkflow];
+      const rawResults = data?.data?.[dataKey];
+      const results: KagiItem[] = Array.isArray(rawResults)
+        ? (rawResults as KagiItem[])
+        : [];
 
       if (results.length === 0) {
         const msg = `No results found for "${query}"`;
-        if (data.suggestions && data.suggestions.length > 0) {
-          return `${msg}\n\nSuggestions: ${data.suggestions.join(", ")}`;
+        const related = data?.data?.related_search;
+        if (Array.isArray(related) && related.length > 0) {
+          const terms = related
+            .map((r) => (r as { title?: string }).title)
+            .filter(Boolean)
+            .join(", ");
+          if (terms) return `${msg}\n\nRelated searches: ${terms}`;
         }
         return msg;
       }
@@ -96,14 +138,17 @@ export const searchTool: ToolHandler = {
         .map((r, i) => {
           const parts = [`${i + 1}. ${r.title || "(no title)"}`];
           if (r.url) parts.push(`   ${r.url}`);
-          if (r.content) parts.push(`   ${r.content}`);
+          if (r.image?.url) parts.push(`   image: ${r.image.url}`);
+          if (r.snippet) parts.push(`   ${stripHtml(r.snippet)}`);
+          if (r.published) parts.push(`   published: ${r.published}`);
           return parts.join("\n");
         })
         .join("\n\n");
 
-      const header = `Search results for "${query}" (page ${pageno}, ${results.length} results):`;
+      const header = `Search results for "${query}" (${effectiveWorkflow}, ${results.length} results):`;
       return `${header}\n\n${formatted}`;
     } catch (err: unknown) {
+      clearTimeout(timeout);
       if (err instanceof Error && err.name === "AbortError") {
         return "Search unavailable: request timed out after 10 seconds";
       }

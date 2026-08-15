@@ -16,7 +16,7 @@ export interface Config {
   vaultwardenUrl: string;
   vaultwardenEmail: string;
   vaultwardenMasterPassword: string;
-  searxngToken: string;
+  kagiToken: string;
   // Cognee memory backend feature flags (Phase 2 migration)
   memoryBackend: string;        // "sqlite" (default/legacy) or "cognee"
   cogneeUrl: string;            // "http://127.0.0.1:8001"
@@ -43,7 +43,7 @@ export const config: Config = {
   vaultwardenUrl: "",
   vaultwardenEmail: "",
   vaultwardenMasterPassword: "",
-  searxngToken: "",
+  kagiToken: "",
   memoryBackend: "sqlite",
   cogneeUrl: "http://127.0.0.1:8001",
   cogneeDataset: "patronum_memory",
@@ -76,10 +76,10 @@ export async function initConfig(): Promise<void> {
   config.vaultwardenEmail = getOptionalString(vaultwarden, "vaultwarden.email", "email", tomlPath) ?? "";
   config.vaultwardenMasterPassword = getOptionalString(vaultwarden, "vaultwarden.master_password", "master_password", tomlPath) ?? "";
 
-  const searxng = getOptionalTable(data, "searxng", tomlPath) ?? {};
-  // Allow empty token for searxng — it's optional and Danny can fill it in later
-  const tokenValue = searxng.token;
-  config.searxngToken = typeof tokenValue === "string" ? tokenValue : "";
+  const kagi = getOptionalTable(data, "kagi", tomlPath) ?? {};
+  // Allow empty token for kagi — it's optional and Danny can fill it in later
+  const tokenValue = kagi.token;
+  config.kagiToken = typeof tokenValue === "string" ? tokenValue : "";
 
   // Cognee memory backend feature flags
   const memory = getOptionalTable(data, "memory", tomlPath) ?? {};

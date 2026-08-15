@@ -32,7 +32,7 @@ You are given:
 Output only the cleaned text, nothing else. If the transcription is already correct, output it unchanged.
 
 Known technical terms and domain vocabulary:
-Claude, Anthropic, GPT-4o, Haiku, Sonnet, Opus, TypeScript, Telegram, SearXNG, Patronum, Vaultwarden, TOML, SQLite, API, REST, JSON, Whisper, OpenAI, Visa, Visa Infinite, voice message, GitHub, code review`;
+Claude, Anthropic, GPT-4o, Haiku, Sonnet, Opus, TypeScript, Telegram, Kagi, Patronum, Vaultwarden, TOML, SQLite, API, REST, JSON, Whisper, OpenAI, Visa, Visa Infinite, voice message, GitHub, code review`;
 
 /**
  * Format recent history messages for the cleanup context.
