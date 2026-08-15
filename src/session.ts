@@ -49,6 +49,213 @@ export function initSession(): void {
     console.error("[migration] Failed to check/add telegram_message_id column:", err);
     throw err;
   }
+
+  // Initialize audit ledger for telegram_read_message tool
+  initAuditLedger();
+}
+
+// ---------------------------------------------------------------------------
+// Telegram Read Audit Ledger
+// ---------------------------------------------------------------------------
+
+export interface AuditRowInput {
+  requesting_chat: string;
+  requested_chat_id: string;
+  requested_message_id: number;
+  stage_msg_id: number;
+  content_hash: string;
+}
+
+export interface OutstandingRow {
+  id: number;
+  stage_msg_id: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Idempotent migration: create the audit ledger table if it does not exist.
+ */
+export function initAuditLedger(): void {
+  const dbPath = path.join(config.workspace, "patronum.db");
+  const auditDb = new Database(dbPath);
+  auditDb.pragma("journal_mode = WAL");
+
+  auditDb.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_read_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      requesting_chat TEXT NOT NULL,
+      requested_chat_id TEXT NOT NULL,
+      requested_message_id INTEGER NOT NULL,
+      stage_msg_id INTEGER NOT NULL,
+      content_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'outstanding',
+      delete_outcome TEXT,
+      duration_ms INTEGER,
+      sweep_retries INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      CHECK (status IN ('outstanding', 'done', 'failed'))
+    )
+  `);
+
+  auditDb.exec(`
+    CREATE INDEX IF NOT EXISTS idx_audit_status
+    ON telegram_read_audit(status, created_at)
+  `);
+
+  auditDb.exec(`
+    CREATE INDEX IF NOT EXISTS idx_audit_stage_msg
+    ON telegram_read_audit(stage_msg_id)
+  `);
+
+  auditDb.close();
+}
+
+/**
+ * Insert an outstanding audit row BEFORE deleting the staged copy.
+ * Returns the new row id.
+ */
+export function persistOutstandingRow(input: AuditRowInput): number {
+  const dbPath = path.join(config.workspace, "patronum.db");
+  const auditDb = new Database(dbPath);
+  auditDb.pragma("journal_mode = WAL");
+
+  try {
+    // Self-heal: create the table if it does not exist, so forward-before-persist
+    // can never recur even if initAuditLedger was not called.
+    auditDb.exec(`
+      CREATE TABLE IF NOT EXISTS telegram_read_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        requesting_chat TEXT NOT NULL,
+        requested_chat_id TEXT NOT NULL,
+        requested_message_id INTEGER NOT NULL,
+        stage_msg_id INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'outstanding',
+        delete_outcome TEXT,
+        duration_ms INTEGER,
+        sweep_retries INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (status IN ('outstanding', 'done', 'failed'))
+      )
+    `);
+    auditDb.exec(`
+      CREATE INDEX IF NOT EXISTS idx_audit_status
+      ON telegram_read_audit(status, created_at)
+    `);
+    auditDb.exec(`
+      CREATE INDEX IF NOT EXISTS idx_audit_stage_msg
+      ON telegram_read_audit(stage_msg_id)
+    `);
+
+    const result = auditDb
+      .prepare(
+        `INSERT INTO telegram_read_audit
+         (requesting_chat, requested_chat_id, requested_message_id, stage_msg_id, content_hash, status)
+         VALUES (?, ?, ?, ?, ?, 'outstanding')`
+      )
+      .run(
+        input.requesting_chat,
+        input.requested_chat_id,
+        input.requested_message_id,
+        input.stage_msg_id,
+        input.content_hash,
+      );
+    return Number(result.lastInsertRowid);
+  } finally {
+    auditDb.close();
+  }
+}
+
+/**
+ * Mark an audit row as done after successful delete.
+ */
+export function markAuditRowDone(id: number, durationMs: number): void {
+  const dbPath = path.join(config.workspace, "patronum.db");
+  const auditDb = new Database(dbPath);
+  auditDb.pragma("journal_mode = WAL");
+
+  try {
+    auditDb
+      .prepare(
+        `UPDATE telegram_read_audit
+         SET status = 'done', duration_ms = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(durationMs, id);
+  } finally {
+    auditDb.close();
+  }
+}
+
+/**
+ * Mark an audit row as failed with a reason.
+ */
+export function markAuditRowFailed(id: number, reason: string): void {
+  const dbPath = path.join(config.workspace, "patronum.db");
+  const auditDb = new Database(dbPath);
+  auditDb.pragma("journal_mode = WAL");
+
+  try {
+    auditDb
+      .prepare(
+        `UPDATE telegram_read_audit
+         SET status = 'failed', delete_outcome = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(reason, id);
+  } finally {
+    auditDb.close();
+  }
+}
+
+/**
+ * Return all rows with status='outstanding' for the sweeper to retry cleanup.
+ */
+export function getOutstandingRows(): OutstandingRow[] {
+  const dbPath = path.join(config.workspace, "patronum.db");
+  const auditDb = new Database(dbPath);
+  auditDb.pragma("journal_mode = WAL");
+
+  try {
+    return auditDb
+      .prepare(
+        `SELECT id, stage_msg_id, requesting_chat, requested_chat_id, requested_message_id, content_hash, sweep_retries, created_at
+         FROM telegram_read_audit
+         WHERE status = 'outstanding'
+         ORDER BY id ASC`
+      )
+      .all() as OutstandingRow[];
+  } finally {
+    auditDb.close();
+  }
+}
+
+/**
+ * Increment sweep_retries for an outstanding audit row.
+ * Used by the sweeper to track persistent deletion failures.
+ */
+export function incrementSweepRetries(id: number): number {
+  const dbPath = path.join(config.workspace, "patronum.db");
+  const auditDb = new Database(dbPath);
+  auditDb.pragma("journal_mode = WAL");
+
+  try {
+    auditDb
+      .prepare(
+        `UPDATE telegram_read_audit
+         SET sweep_retries = sweep_retries + 1, updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(id);
+    const row = auditDb
+      .prepare(`SELECT sweep_retries FROM telegram_read_audit WHERE id = ?`)
+      .get(id) as { sweep_retries: number } | undefined;
+    return row?.sweep_retries ?? 0;
+  } finally {
+    auditDb.close();
+  }
 }
 
 export function loadHistory(chatId: string): Message[] {

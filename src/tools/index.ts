@@ -4,6 +4,7 @@ import { readTool } from "./read.js";
 import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
 import { sendMediaTool, setBot, setSendMediaChatId } from "./send-media.js";
+import { readTelegramMessageTool } from "./telegram-read-message.js";
 import { spawnAgentTool, setSpawnCallback } from "./spawn-agent.js";
 import { cancelAgentTool } from "./cancel-agent.js";
 import { listTasksTool } from "./list-tasks.js";
@@ -19,6 +20,7 @@ export { setCurrentChatId, getCurrentChatId } from "./chat-context.js";
 export { setBot, setSendMediaChatId };
 export { setSpawnCallback };
 export { setSkillOverrides };
+export { startStagingSweeper, stopStagingSweeper } from "./telegram-read-message.js";
 
 const tools: ToolHandler[] = [
   execTool,
@@ -37,6 +39,7 @@ const tools: ToolHandler[] = [
   listAgentThreadsTool,
   runEvalTool,
   loadSkillTool,
+  readTelegramMessageTool,
 ];
 
 const toolMap = new Map<string, ToolHandler>(

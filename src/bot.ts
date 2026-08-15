@@ -10,6 +10,7 @@ import { getAgentDef } from "./agents.js";
 import { compactIfNeeded, getContextWindow } from "./compaction.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { setCurrentChatId, setBot, setSendMediaChatId, setSpawnCallback } from "./tools/index.js";
+import { startStagingSweeper } from "./tools/telegram-read-message.js";
 import { loadRestartState, clearRestartState } from "./tools/self-restart.js";
 import { taskManager } from "./task-manager.js";
 import { initEmbeddings, initMemoryStore, initMigrationLedger, indexExchange, getChunkCount, migrateLivingMemory } from "./memory/index.js";
@@ -225,6 +226,7 @@ export async function startBot(): Promise<void> {
     },
   });
   setBot(bot);
+  startStagingSweeper();
   const BOT_START_TIME = Math.floor(Date.now() / 1000);
   console.log("[agent] Using agentkeepalive HttpsAgent (freeSocketTimeout=20000ms for idle-socket eviction)");
 

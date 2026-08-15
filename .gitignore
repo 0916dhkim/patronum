@@ -10,4 +10,5 @@ SOUL.md
 AGENTS.md
 MEMORY.md
 tests/
+!src/tests/
 skills/

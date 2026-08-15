@@ -42,6 +42,7 @@ const SUBAGENT_BLOCKED_TOOLS = new Set([
   "self_restart",
   "cancel_agent",
   "list_tasks",
+  "read_telegram_message",
 ]);
 
 async function callClaudeForAgent(

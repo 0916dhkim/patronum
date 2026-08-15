@@ -9,6 +9,7 @@ export interface Config {
   reasoningEffort?: string;
   openrouterApiKey: string;
   workspace: string;
+  stagingChatId: string;
   ownerChatId: string;
   voyageApiKey: string;
   openaiApiKey: string;
@@ -36,6 +37,7 @@ export const config: Config = {
   openrouterApiKey: "",
   workspace: "",
   ownerChatId: "",
+  stagingChatId: "-1003936236995",
   voyageApiKey: "",
   openaiApiKey: "",
   vaultwardenUrl: "",
@@ -62,6 +64,7 @@ export async function initConfig(): Promise<void> {
   config.claudeModel = getOptionalString(patronum, "patronum.model", "model", tomlPath) ?? "claude-sonnet-4-6";
   config.reasoningEffort = getOptionalString(patronum, "patronum.reasoning_effort", "reasoning_effort", tomlPath);
   config.ownerChatId = getOptionalString(patronum, "patronum.owner_chat_id", "owner_chat_id", tomlPath) ?? "";
+  config.stagingChatId = getOptionalString(patronum, "patronum.staging_chat_id", "staging_chat_id", tomlPath) ?? "-1003936236995";
   config.claudeToken = getRequiredString(credentials, "credentials.claude_token", "claude_token", tomlPath);
   config.telegramBotToken = getRequiredString(credentials, "credentials.telegram_bot_token", "telegram_bot_token", tomlPath);
   config.voyageApiKey = getOptionalString(credentials, "credentials.voyage_api_key", "voyage_api_key", tomlPath) ?? "";
