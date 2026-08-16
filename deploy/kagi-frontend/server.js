@@ -459,7 +459,9 @@ server.listen(Number(PORT), function () {
 });
 
 // ============================================================================
-// Embedded HTML/CSS/JS frontend (mobile-first, system dark mode, XSS-safe).
+// Embedded HTML/CSS/JS frontend — single-page "Launcher" with two visual states
+// (body.start centered prompt / body.results sticky bar + results list) toggled
+// by a class on <body>. Mobile-first, system dark mode, XSS-safe.
 // Placeholder __NONCE__ is replaced per-response with a fresh CSP nonce.
 // NOTE: this template literal must never contain a backtick or "${".
 // ============================================================================
@@ -470,240 +472,318 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kagi</title>
-<link rel="icon" href="data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f2937'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='18' font-weight='bold' text-anchor='middle' fill='%23f5f5f5'%3EK%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230d0e11'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='18' font-weight='bold' text-anchor='middle' fill='%233ddc84'%3EK%3C/text%3E%3C/svg%3E">
 <style>
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
   :root {
     color-scheme: light dark;
-    --bg: #ffffff;
-    --surface: #f6f7f8;
-    --text: #1a1d21;
-    --muted: #6b7280;
-    --border: #d7dbe0;
-    --accent: #2f6fed;
-    --link: #1a5cd7;
+    --bg: #0d0e11;
+    --text: #d7dadd;
+    --muted: #717980;
+    --border: #262a31;
+    --accent: #3ddc84;
+    --surface: #13151a;
+    --link: #6fc3df;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
-  @media (prefers-color-scheme: dark) {
+  @media (prefers-color-scheme: light) {
     :root {
-      --bg: #111216;
-      --surface: #1a1c22;
-      --text: #e8eaed;
-      --muted: #9aa0a8;
-      --border: #2a2d35;
-      --accent: #5b8def;
-      --link: #8ab4f8;
+      --bg: #f4f4f0;
+      --text: #1d1f1e;
+      --muted: #858b86;
+      --border: #d8dcd4;
+      --accent: #1a7f37;
+      --surface: #ffffff;
+      --link: #0b5c7a;
     }
   }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.5;
+    font-family: var(--mono);
+    line-height: 1.55;
+    min-height: 100vh;
     -webkit-text-size-adjust: 100%;
   }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
-  header { margin: 8px 0 20px; }
-  header h1 { font-size: 28px; margin: 0; }
-  header p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
-  .sr-only {
-    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- Start state: centered prompt ---- */
+  body.start {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 20px;
   }
-  form.search { display: flex; gap: 8px; margin-bottom: 12px; }
-  input[type="search"] {
-    flex: 1; min-width: 0; font-size: 16px; padding: 12px 14px;
-    border: 1px solid var(--border); border-radius: 10px;
-    background: var(--surface); color: var(--text); outline: none;
+  body.start .topbar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
   }
-  input[type="search"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.15); }
-  button[type="submit"] {
-    font-size: 16px; padding: 0 18px; border: 0; border-radius: 10px;
-    background: var(--accent); color: #fff; cursor: pointer;
+  body.start .brand-start {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    margin-bottom: 26px;
   }
-  button[type="submit"]:disabled { opacity: 0.6; cursor: default; }
-  button[type="submit"].loading::after {
-    content: ""; display: inline-block; width: 14px; height: 14px; margin-left: 8px;
-    border: 2px solid rgba(255, 255, 255, 0.4); border-top-color: #fff;
-    border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: -2px;
+  body.start .brand-results { display: none; }
+  body.start .prompt {
+    display: flex;
+    align-items: center;
+    width: min(640px, 88vw);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .tabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 16px; padding-bottom: 2px; -webkit-overflow-scrolling: touch; }
-  .tabs button {
-    flex: 0 0 auto; font-size: 14px; padding: 8px 14px; border-radius: 999px;
-    border: 1px solid var(--border); background: transparent; color: var(--muted);
-    cursor: pointer; white-space: nowrap;
+  body.start .prompt:focus-within { border-color: var(--accent); }
+  body.start .prompt .chev { color: var(--accent); font-weight: 700; padding: 0 0 0 16px; font-size: 16px; }
+  body.start .prompt input {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 15px;
+    padding: 16px 14px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+    caret-color: var(--accent);
   }
-  .tabs button.active { background: var(--surface); color: var(--text); border-color: var(--accent); font-weight: 600; }
-  .tabs button:focus-visible, a:focus-visible, input:focus-visible, button:focus-visible {
-    outline: 2px solid var(--accent); outline-offset: 2px;
+  body.start .prompt input::placeholder { color: var(--muted); }
+  body.start .prompt .go { color: var(--muted); font-size: 14px; padding: 0 16px 0 0; white-space: nowrap; }
+  body.start .hints { margin-top: 20px; display: flex; gap: 20px; font-size: 11px; color: var(--muted); }
+  body.start .hints b { color: var(--accent); font-weight: 700; }
+  body.start .wrap { display: none; }
+
+  /* ---- Results state: sticky top bar + results list ---- */
+  body.results .topbar {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    z-index: 10;
   }
-  .status { min-height: 1.4em; color: var(--muted); font-size: 14px; margin-bottom: 8px; }
-  .list { display: flex; flex-direction: column; gap: 18px; }
-  .result .title { color: var(--link); font-size: 17px; font-weight: 600; text-decoration: none; }
-  .result .title:hover { text-decoration: underline; }
-  .meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
-  .meta .date::before { content: " · "; }
-  .snippet { margin: 4px 0 0; color: var(--text); font-size: 15px; overflow-wrap: break-word; }
-  .thumb-wrap { display: block; margin-bottom: 8px; }
+  body.results .brand-start { display: none; }
+  body.results .brand-results {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1.5px;
+    white-space: nowrap;
+  }
+  body.results .prompt {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  body.results .prompt:focus-within { border-color: var(--accent); }
+  body.results .prompt .chev { color: var(--accent); font-weight: 700; padding: 0 0 0 12px; }
+  body.results .prompt input {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 10px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+    caret-color: var(--accent);
+  }
+  body.results .prompt .go { color: var(--muted); font-size: 13px; padding: 0 12px 0 0; }
+  body.results .hints { display: none; }
+  body.results .wrap { display: block; max-width: 760px; margin: 0 auto; padding: 0 20px 80px; }
+  #status { color: var(--muted); font-size: 12px; min-height: 1.2em; }
+  body.start #status { text-align: center; margin-top: 18px; width: min(640px, 88vw); }
+  body.results #status { max-width: 760px; margin: 18px auto 14px; padding: 0 20px; }
+  #status .ok { color: var(--accent); }
+  body.results .footer { color: var(--muted); font-size: 11px; margin-top: 26px; border-top: 1px solid var(--border); padding-top: 14px; }
+
+  /* ---- Result rows: idx / title+body / thumb ---- */
+  .result {
+    padding: 15px 0;
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "idx title thumb" "idx body thumb";
+    column-gap: 14px;
+    align-items: start;
+  }
+  .idx { grid-area: idx; color: var(--muted); line-height: 1.6; }
+  .title { grid-area: title; font-size: 15px; color: var(--link); text-decoration: none; font-weight: 700; }
+  .title:hover { text-decoration: underline; }
+  .body { grid-area: body; min-width: 0; }
+  .host { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .host::before { content: "— "; }
+  .snippet { font-size: 13px; color: var(--text); opacity: 0.85; margin-top: 4px; }
   .thumb {
-    display: block; width: 100%; max-width: 320px; aspect-ratio: 16 / 9;
-    object-fit: cover; border-radius: 8px; background: var(--surface);
+    grid-area: thumb;
+    width: 72px;
+    height: 72px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    object-fit: cover;
+    background: var(--surface);
+    display: block;
   }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-  .cell { display: block; text-decoration: none; color: inherit; }
-  .cell img {
-    width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 8px;
-    background: var(--surface); display: block;
-  }
-  .cell-title {
-    font-size: 13px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: var(--text);
-  }
-  @media (max-width: 480px) { .wrap { padding: 12px; } }
-  @media (prefers-reduced-motion: reduce) {
-    button[type="submit"].loading::after { animation: none; }
+
+  @media (max-width: 480px) {
+    body.start .hints { flex-wrap: wrap; gap: 10px; justify-content: center; }
+    body.results .topbar { padding: 10px 14px; gap: 10px; }
+    body.results .brand-results { display: none; }
+    body.results .wrap { padding: 0 14px 70px; }
+    body.results #status { padding: 0 14px; }
+    .result { grid-template-areas: "idx title title" "idx body body"; }
+    .result.has-thumb { grid-template-areas: "idx title title" "idx body thumb"; }
+    .thumb { width: 60px; height: 60px; }
   }
 </style>
 </head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>Kagi</h1>
-    <p>Private search</p>
-  </header>
-  <form id="search-form" class="search" action="/api/search" method="post">
-    <label for="query" class="sr-only">Search</label>
-    <input type="search" id="query" name="query" inputmode="search" enterkeyhint="search"
-           autofocus placeholder="Search the web" autocomplete="off">
-    <button type="submit" id="submit">Search</button>
+<body class="start">
+<header class="topbar">
+  <span class="brand brand-start">KAGI SEARCH</span>
+  <span class="brand brand-results">KAGI</span>
+  <form id="search-form" class="prompt" action="/" method="post" autocomplete="off">
+    <span class="chev" aria-hidden="true">›</span>
+    <input type="search" id="query" name="query" placeholder="type a query…" autofocus spellcheck="false" autocomplete="off" enterkeyhint="search" aria-label="Search query">
+    <span class="go" aria-hidden="true">↵</span>
   </form>
-  <div class="tabs" role="tablist" aria-label="Search type">
-    <button type="button" role="tab" data-workflow="search" aria-selected="true">Web</button>
-    <button type="button" role="tab" data-workflow="images" aria-selected="false">Images</button>
-    <button type="button" role="tab" data-workflow="news" aria-selected="false">News</button>
-    <button type="button" role="tab" data-workflow="videos" aria-selected="false">Videos</button>
-    <button type="button" role="tab" data-workflow="podcasts" aria-selected="false">Podcasts</button>
-  </div>
-  <div id="status" class="status" aria-live="polite"></div>
-  <main id="results" aria-live="polite"></main>
+</header>
+<div class="hints">
+  <span><b>↵</b> search</span>
+  <span><b>/</b> focus</span>
+  <span><b>esc</b> clear</span>
 </div>
+<div id="status" class="status" aria-live="polite"></div>
+<main class="wrap">
+  <div id="results" aria-live="polite"></div>
+  <div class="footer">no history · no cache · no tracking</div>
+</main>
 <script nonce="__NONCE__">
 (function () {
   "use strict";
   var form = document.getElementById("search-form");
   var input = document.getElementById("query");
-  var resultsEl = document.getElementById("results");
   var statusEl = document.getElementById("status");
-  var submitBtn = document.getElementById("submit");
-  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
-  var workflow = "search";
+  var resultsEl = document.getElementById("results");
   var seq = 0;
   var pending = false;
 
-  // XSS-safe builder: createElement + textContent only. No innerHTML anywhere.
-  function el(tag, attrs, children) {
-    var node = document.createElement(tag);
-    if (attrs) {
-      Object.keys(attrs).forEach(function (k) {
-        var v = attrs[k];
-        if (v === null || v === undefined || v === false) return;
-        if (k === "class") {
-          node.className = v;
-        } else if (k === "text") {
-          node.textContent = v;
-        } else if (k === "href" || k === "src") {
-          if (typeof v === "string" && /^https?:\\/\\//.test(v)) {
-            if (k === "href") node.href = v;
-            else node.src = v;
-          }
-        } else if (k === "target" || k === "rel" || k === "loading" || k === "decoding" || k === "alt") {
-          node.setAttribute(k, v);
-        } else {
-          node.setAttribute(k, v);
-        }
-      });
-    }
-    if (children) {
-      children.forEach(function (c) {
-        if (c === null || c === undefined) return;
-        node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-      });
-    }
-    return node;
-  }
-
-  function setStatus(msg) {
+  function setStatusText(msg) {
     statusEl.textContent = msg || "";
   }
 
-  function setTabs() {
-    tabs.forEach(function (t) {
-      var active = t.getAttribute("data-workflow") === workflow;
-      t.setAttribute("aria-selected", active ? "true" : "false");
-      if (active) t.classList.add("active");
-      else t.classList.remove("active");
-    });
+  function setStatusCount(count) {
+    statusEl.textContent = "";
+    var ok = document.createElement("span");
+    ok.className = "ok";
+    ok.textContent = "✓ ";
+    statusEl.appendChild(ok);
+    statusEl.appendChild(document.createTextNode(count + " results · cache: off"));
   }
 
-  function render(results) {
+  function hostOf(url) {
+    try {
+      return new URL(url).hostname;
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function renderResults(results, count) {
     resultsEl.textContent = "";
-    if (!results || results.length === 0) {
-      setStatus("No results.");
+    if (!results || results.length === 0 || count === 0) {
+      setStatusText("No results.");
       return;
     }
-    setStatus("");
-    if (workflow === "images") {
-      var grid = el("div", { class: "grid" });
-      results.forEach(function (r) {
-        if (!r.image) return; // cells without an image URL are skipped
-        var cell = el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", class: "cell" });
-        cell.appendChild(el("img", { src: r.image, alt: r.title, loading: "lazy", decoding: "async" }));
-        cell.appendChild(el("div", { class: "cell-title", text: r.title }));
-        grid.appendChild(cell);
-      });
-      resultsEl.appendChild(grid);
-      return;
-    }
-    var list = el("div", { class: "list" });
-    results.forEach(function (r) {
-      var item = el("article", { class: "result" });
-      if (r.image && workflow === "videos") {
-        var awrap = el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", class: "thumb-wrap" });
-        awrap.appendChild(el("img", { src: r.image, alt: "", loading: "lazy", decoding: "async", class: "thumb" }));
-        item.appendChild(awrap);
+    setStatusCount(count);
+    for (var i = 0; i < results.length; i++) {
+      var r = results[i];
+      var hasImage = typeof r.image === "string" &&
+        (r.image.indexOf("https://") === 0 || r.image.indexOf("http://") === 0);
+      var item = document.createElement("article");
+      item.className = hasImage ? "result has-thumb" : "result";
+
+      var idx = document.createElement("span");
+      idx.className = "idx";
+      idx.textContent = "[" + (i + 1) + "]";
+      item.appendChild(idx);
+
+      var title = document.createElement("a");
+      title.className = "title";
+      title.textContent = r.title;
+      title.target = "_blank";
+      title.rel = "noopener noreferrer";
+      if (typeof r.url === "string" && (r.url.indexOf("https://") === 0 || r.url.indexOf("http://") === 0)) {
+        title.href = r.url;
       }
-      item.appendChild(el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", class: "title", text: r.title }));
-      var line = el("div", { class: "meta" });
-      var host = "";
-      try {
-        host = new URL(r.url).hostname;
-      } catch (e) { /* ignore */ }
-      if (host) line.appendChild(el("span", { class: "host", text: host }));
-      if (r.published) line.appendChild(el("span", { class: "date", text: r.published }));
-      if (line.childNodes.length) item.appendChild(line);
-      if (r.snippet) item.appendChild(el("p", { class: "snippet", text: r.snippet }));
-      list.appendChild(item);
-    });
-    resultsEl.appendChild(list);
+      item.appendChild(title);
+
+      var body = document.createElement("div");
+      body.className = "body";
+      var host = hostOf(r.url);
+      if (host) {
+        var hostEl = document.createElement("div");
+        hostEl.className = "host";
+        hostEl.textContent = host;
+        body.appendChild(hostEl);
+      }
+      if (r.snippet) {
+        var p = document.createElement("p");
+        p.className = "snippet";
+        p.textContent = r.snippet;
+        body.appendChild(p);
+      }
+      item.appendChild(body);
+
+      if (hasImage) {
+        var img = document.createElement("img");
+        img.className = "thumb";
+        img.alt = "";
+        img.src = r.image;
+        item.appendChild(img);
+      }
+
+      resultsEl.appendChild(item);
+    }
+  }
+
+  function resetToStart() {
+    input.value = "";
+    document.body.className = "start";
+    resultsEl.textContent = "";
+    statusEl.textContent = "";
+    seq++;
+    pending = false;
+    input.disabled = false;
+    input.focus();
   }
 
   function doSearch() {
     if (pending) return;
     var query = input.value.trim();
-    if (!query) {
-      setStatus("");
-      return;
-    }
+    if (!query) return;
     pending = true;
-    submitBtn.disabled = true;
-    submitBtn.classList.add("loading");
+    input.disabled = true;
     var mySeq = ++seq;
-    setStatus("Searching\u2026");
+    setStatusText("Searching…");
     fetch("/api/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, workflow: workflow })
+      body: JSON.stringify({ query: query, workflow: "search" })
     }).then(function (resp) {
       if (resp.status === 403) throw { kind: "expired" };
       if (resp.status === 502 || resp.status === 504) throw { kind: "upstream" };
@@ -711,22 +791,25 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       return resp.json();
     }).then(function (data) {
       if (mySeq !== seq) return;
-      render(data.results || []);
+      var count = (data && typeof data.count === "number") ? data.count : 0;
+      var results = (data && Array.isArray(data.results)) ? data.results : [];
+      document.body.className = "results";
+      input.value = query;
+      renderResults(results, count);
     }).catch(function (err) {
       if (mySeq !== seq) return;
-      resultsEl.textContent = "";
       if (err && err.kind === "expired") {
-        setStatus("Session expired \u2014 reopen the page with your token link.");
+        setStatusText("Session expired — reopen the page with your token link.");
       } else if (err && err.kind === "upstream") {
-        setStatus("Kagi API error, try again.");
+        setStatusText("Kagi API error, try again.");
       } else {
-        setStatus("Search failed, try again.");
+        setStatusText("Search failed, try again.");
       }
     }).then(function () {
       if (mySeq !== seq) return;
       pending = false;
-      submitBtn.disabled = false;
-      submitBtn.classList.remove("loading");
+      input.disabled = false;
+      input.focus();
     });
   }
 
@@ -735,22 +818,16 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     doSearch();
   });
 
-  tabs.forEach(function (t) {
-    t.addEventListener("click", function () {
-      workflow = t.getAttribute("data-workflow");
-      setTabs();
-      if (input.value.trim()) doSearch();
-    });
-  });
-
   document.addEventListener("keydown", function (e) {
     if (e.key === "/" && document.activeElement !== input) {
       e.preventDefault();
       input.focus();
+    } else if (e.key === "Escape" && document.activeElement === input) {
+      e.preventDefault();
+      resetToStart();
     }
   });
 
-  setTabs();
   input.focus();
 })();
 </script>
