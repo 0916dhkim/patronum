@@ -881,6 +881,34 @@ async function processQueue(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Memory redesign (plan v2): day-scoped session ids + bounded auto-recall
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the current date (YYYY-MM-DD) in America/New_York.
+ * Boundary 00:00 America/New_York; DST-safe via Intl.
+ */
+function getNyDateString(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/**
+ * Day-scoped session id, captured ONCE at turn start (1 day = 1 session,
+ * boundary 00:00 America/New_York). Passed to indexExchange for the per-turn
+ * QA + trace writes (auto-recall was dropped — see plan v4).
+ */
+function getSessionId(chatId: string): string {
+  return `chat:${chatId}:${getNyDateString(new Date())}`;
+}
+
 async function handleEvent(
   event: ChatEvent,
   chatId: string,
@@ -908,6 +936,12 @@ async function handleEvent(
   state.activeController = streamController;
 
   try {
+
+  // Day-scoped session id, captured ONCE at turn start (1 day = 1 session,
+  // boundary 00:00 America/New_York). Passed to both recall and indexExchange;
+  // NOT recomputed at write time so a turn spanning midnight lands in the
+  // session it started in (00:40 catch-up handles late-landing QAs).
+  const sessionId = getSessionId(chatId);
 
   // Load session history, dropping empty assistant messages. A turn that
   // produced only reasoning leaves an empty assistant message behind, and
@@ -985,6 +1019,10 @@ async function handleEvent(
     saveMessage(chatId, syntheticMessage);
 
     }
+
+  // No auto-recall read path (dropped — see plan v4): the agent runs on the
+  // original history. Memory context is available via the manual
+  // memory_search tool / MEMORY.md / Living Memory instead.
 
   // Resolve the active model exactly once per main turn.
   // The same resolved model is passed to both runAgentStreaming and compactIfNeeded,
@@ -1181,7 +1219,9 @@ async function handleEvent(
         }
       }
 
-      // Post-turn: index this exchange into vector memory
+      // Post-turn: index this exchange into vector memory. indexExchange also
+      // captures per-tool-call traces there (rememberTraceEntry → Cognee session
+      // cache) so improve() can distill agent lessons — all fire-and-forget.
       if (config.voyageApiKey && (event.type === "user_message" || event.type === "user_voice" || event.type === "user_photo")) {
         // Fire-and-forget — don't block the reply
         let exchangeText = "";
@@ -1190,7 +1230,7 @@ async function handleEvent(
         } else {
           exchangeText = event.caption;
         }
-        indexExchange(chatId, exchangeText, newMessages).catch((err) => {
+        indexExchange(chatId, exchangeText, newMessages, undefined, sessionId).catch((err) => {
           console.error(`[bot] Failed to index exchange:`, err);
         });
       }

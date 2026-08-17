@@ -1,0 +1,23 @@
+[Unit]
+Description=Patronum Cognee Daily Improve
+Documentation=https://github.com/PatronumAI/patronum
+After=cognee.service
+Wants=cognee.service
+
+[Service]
+Type=oneshot
+User=patronum
+Group=patronum
+WorkingDirectory=/var/lib/patronum
+ExecStart=/var/lib/patronum/cognee/.venv312/bin/python /var/lib/patronum/source/deploy/cognee/daily_improve.py
+# Large timeout: bounded improve poll (~600s) + headroom. Mirrors
+# cognify_scheduled.sh's large TimeoutStartSec but larger for the poll bound.
+TimeoutStartSec=900
+EnvironmentFile=/var/lib/patronum/cognee/.env
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/patronum/cognee
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

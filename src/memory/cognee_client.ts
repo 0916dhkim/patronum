@@ -24,6 +24,13 @@ const TIMEOUT_ADD = 30_000;       // cognify can take ~55s
 const TIMEOUT_COGNIFY = 5_000;
 const TIMEOUT_HEALTH = 2_000;
 const TIMEOUT_REMEMBER = 60_000;  // blocking remember can take 20-60s
+// ── Memory redesign (harness-owned session capture + bounded auto-recall) ──
+const TIMEOUT_REMEMBER_ENTRY = 15_000;  // session-cache QA write is fast
+const TIMEOUT_REMEMBER_TRACE = 60_000;  // trace (agent trace step) write is heavier — generous, still bounded
+const TIMEOUT_IMPROVE = 300_000;        // improve awaits inline session stages (trace extraction,
+                                        // distill) before backgrounding memify — allow up to 5 min
+const TIMEOUT_RECALL_CONTEXT = 4_000;   // recall-only budget (plan §4) — no separate health check
+const TIMEOUT_STATUS = 5_000;           // datasets/status poll
 
 export interface CogneeRecallResult {
   kind: string;
@@ -354,3 +361,210 @@ export async function addWithMetadata(
     try { await fs.promises.unlink(metaFile); } catch { /* ignore */ }
   }
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+// Memory redesign (plan v2): harness-owned session capture → bounded
+// auto-recall on read → midnight improve. These three functions replace the
+// legacy uncurated write path (addWithMetadata/add + scheduled cognify).
+// The existing recall()/formatRecallResults() above stay untouched for the
+// memory_search tool.
+// ═════════════════════════════════════════════════════════════════════════
+
+export interface RememberQaResult {
+  status?: string;
+  entry_type?: string;
+  entry_id?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * One agent trace step persisted to the Cognee session cache (typed TraceEntry).
+ * Harness-owned per-tool-call rows that improve()'s agent-context extraction
+ * consumes to produce gated agent-profile lessons (distillation becomes live).
+ *
+ * CONTRACT (verified against installed Cognee 1.4.0): `method_params` MUST be a
+ * dict — pydantic rejects a stringified JSON string with a 422 dict_type error.
+ * `method_return_value` may be any JSON value (string is fine; sanitized +
+ * truncated server-side); `error_message` is a string. Callers build
+ * `method_params` as a dict; oversized params are bounded as
+ * {"truncated":true,"preview":<stringified slice>}.
+ */
+export interface CogneeTraceEntry {
+  type: "trace";
+  origin_function: string;
+  status: "success" | "error";
+  method_params?: Record<string, unknown>;
+  method_return_value?: string;
+  error_message?: string;
+  generate_feedback_with_llm: false;
+}
+
+/**
+ * Store a single QA exchange in the Cognee session cache (typed QAEntry).
+ * Session-cache only — no graph writes, no self-improvement (routes to
+ * sm.add_qa()). Requires session_id (Cognee returns 400 otherwise).
+ *
+ * Callers treat failures as non-fatal (fail-open).
+ */
+export async function rememberQaEntry(
+  question: string,
+  answer: string,
+  sessionId: string,
+  context?: string
+): Promise<RememberQaResult> {
+  const r = await fetch(`${COGNEE_BASE_URL}/api/v1/remember/entry`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify({
+      entry: {
+        type: "qa",
+        question,
+        answer,
+        ...(context ? { context } : {}),
+      },
+      dataset_name: DATASET_NAME,
+      session_id: sessionId,
+    }),
+    signal: AbortSignal.timeout(TIMEOUT_REMEMBER_ENTRY),
+  });
+
+  if (!r.ok) {
+    // Log status only — never echo the response body (FastAPI validation
+    // errors echo submitted input, which could carry tool content).
+    throw new Error(`Cognee remember/entry error ${r.status}`);
+  }
+  return (await r.json()) as RememberQaResult;
+}
+
+/**
+ * Store a single agent trace step in the Cognee session cache (typed TraceEntry).
+ * Session-cache only — routes to sm.add_agent_trace_step(). These rows feed
+ * improve()'s agent-context extraction (trace-derived agent lessons), which is
+ * what makes distillation live under this redesign (see plan delta).
+ *
+ * Payload mirrors rememberQaEntry: POST /api/v1/remember/entry with {entry,
+ * dataset_name, session_id}, X-Api-Key auth, bounded by TIMEOUT_REMEMBER_TRACE.
+ * Fail-open: throws on !ok (status + body) so callers can log, never crashes
+ * the caller.
+ */
+export async function rememberTraceEntry(
+  entry: CogneeTraceEntry,
+  sessionId: string
+): Promise<RememberQaResult> {
+  const r = await fetch(`${COGNEE_BASE_URL}/api/v1/remember/entry`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify({
+      entry,
+      dataset_name: DATASET_NAME,
+      session_id: sessionId,
+    }),
+    signal: AbortSignal.timeout(TIMEOUT_REMEMBER_TRACE),
+  });
+
+  if (!r.ok) {
+    // Log status only — never echo the response body (validation errors echo
+    // submitted input, which could carry tool content).
+    throw new Error(`Cognee remember/entry (trace) error ${r.status}`);
+  }
+  return (await r.json()) as RememberQaResult;
+}
+
+/**
+ * Trigger Cognee improve for the given session IDs.
+ * With session_ids set, improve runs the full session pipeline (feedback
+ * weights → Q&A persist → trace persist → agent-context extraction → distill →
+ * memify enrichment) in addition to the default memify enrichment.
+ *
+ * run_in_background=true returns immediately with a status dict.
+ * NOTE: when a single-session improve lock is held Cognee returns {} (HTTP 200)
+ * — callers must treat that as success-skip, not failure.
+ */
+export async function improveSession(
+  sessionIds: string[],
+  background: boolean = true
+): Promise<Record<string, unknown>> {
+  const r = await fetch(`${COGNEE_BASE_URL}/api/v1/improve`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify({
+      dataset_name: DATASET_NAME,
+      session_ids: sessionIds,
+      run_in_background: background,
+    }),
+    signal: AbortSignal.timeout(TIMEOUT_IMPROVE),
+  });
+
+  if (!r.ok) {
+    // 420 (PipelineRunErrored) / 409 (processing error) are non-fatal for the
+    // daily job — surfaced as an Error with status so callers can log, not crash.
+    throw new Error(`Cognee improve error ${r.status}: ${await r.text()}`);
+  }
+  return (await r.json()) as Record<string, unknown>;
+}
+
+/**
+ * Fetch the dataset processing status map (dataset_id → status).
+ * Used to poll background improve runs to completion.
+ *
+ * NOTE: background improve/memify runs register under pipeline_name
+ * "memify_pipeline"; the status endpoint defaults to "cognify_pipeline" when no
+ * pipeline is specified, so callers MUST pass pipeline="memify_pipeline" to
+ * observe improve runs (verified against installed Cognee v1.4.0).
+ */
+export async function getDatasetStatus(
+  signal?: AbortSignal,
+  pipeline: "cognify_pipeline" | "memify_pipeline" = "memify_pipeline"
+): Promise<Record<string, string>> {
+  const params = new URLSearchParams({ pipeline });
+  const r = await fetch(`${COGNEE_BASE_URL}/api/v1/datasets/status?${params}`, {
+    headers: authHeaders(),
+    signal: signal ?? AbortSignal.timeout(TIMEOUT_STATUS),
+  });
+
+  if (!r.ok) {
+    throw new Error(`Cognee datasets/status error ${r.status}: ${await r.text()}`);
+  }
+  return (await r.json()) as Record<string, string>;
+}
+
+/**
+ * Status poller helper for background improve runs (plan §4).
+ * Polls GET /api/v1/datasets/status until the dataset reaches a terminal state
+ * (DATASET_PROCESSING_COMPLETED / DATASET_PROCESSING_ERRORED) or the timeout
+ * elapses. Returns the final status string ("unknown" on timeout).
+ */
+export async function pollDatasetStatus(
+  datasetId: string,
+  opts: { intervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {}
+): Promise<string> {
+  const { intervalMs = 10_000, timeoutMs = 600_000, signal } = opts;
+  const deadline = Date.now() + timeoutMs;
+
+  for (;;) {
+    let statusMap: Record<string, string> = {};
+    try {
+      statusMap = await getDatasetStatus(signal, "memify_pipeline");
+    } catch (err) {
+      // Transient poll failures are non-fatal — keep polling until the deadline.
+      console.warn(`[cognee] datasets/status poll failed (non-fatal):`, err);
+    }
+    const s = statusMap[datasetId];
+    if (s === "DATASET_PROCESSING_COMPLETED" || s === "DATASET_PROCESSING_ERRORED") {
+      return s;
+    }
+    if (Date.now() >= deadline) return s ?? "unknown";
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────

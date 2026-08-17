@@ -5,8 +5,15 @@
 
 import { embed, embedQuery } from "./embeddings.js";
 import { storeChunk, searchChunks, type MemorySearchResult } from "./store.js";
-import { health, recall, formatRecallResults, add, cognify, remember, addWithMetadata } from "./cognee_client.js";
-import type { Message, ContentBlock, ToolUseBlock, ToolResultBlock } from "../types.js";
+import {
+  health,
+  recall,
+  formatRecallResults,
+  rememberQaEntry,
+  rememberTraceEntry,
+  type CogneeTraceEntry,
+} from "./cognee_client.js";
+import type { Message, ContentBlock, ToolUseBlock, ToolResultBlock, TextBlock } from "../types.js";
 import { config } from "../config.js";
 
 // Read feature flags from config (added to config.ts)
@@ -76,12 +83,23 @@ export async function autoRecall(userText: string): Promise<string | null> {
 /**
  * Index a conversation exchange into the vector store(s).
  * Routes to Cognee when dual_write or backend=cognee.
+ *
+ * Memory redesign (plan v2): the Cognee write path is THREE-channel session-cache
+ * capture — a typed QAEntry via rememberQaEntry(userText, assistantReplyText,
+ * sessionId) plus per-tool-call TraceEntry rows via rememberTraceEntry (so
+ * improve()'s agent-context extraction can distill agent lessons) — all
+ * fire-and-forget, fail-open, no graph writes, no self-improvement at write
+ * time. SQLite dual-write stays as the backup.
+ *
+ * sessionId is captured once at turn start in handleEvent (NOT recomputed here)
+ * and identifies the day-scoped session: `chat:{chatId}:{YYYY-MM-DD}`.
  */
 export async function indexExchange(
   chatId: string,
   userText: string,
   assistantMessages: Message[],
-  turnNumber?: number
+  turnNumber?: number,
+  sessionId?: string
 ): Promise<void> {
   try {
     const chunkText = formatExchange(userText, assistantMessages);
@@ -97,33 +115,31 @@ export async function indexExchange(
     const [embedding] = await embed([chunkText]);
     storeChunk(chatId, chunkText, embedding, { turnNumber });
 
-    // Write to Cognee if dual-write or Cognee primary
-    if (isDualWrite || isCogneePrimary) {
-      try {
-        if (await health()) {
-          const metadata = {
-            source: "patronum",
-            chat_id: chatId,
-            timestamp: new Date().toISOString(),
-            turn_number: turnNumber ?? 0,
-          };
+    // Write QA entry to the Cognee session cache if dual-write or Cognee primary.
+    // Fire-and-forget + fail-open: never block or break the reply on Cognee issues.
+    if ((isDualWrite || isCogneePrimary) && sessionId && userText.trim()) {
+      // answer = final reply text (extractTextFromResponse result)
+      const replyText = extractReplyText(assistantMessages);
+      if (replyText && replyText !== "(no response)") {
+        rememberQaEntry(userText, replyText, sessionId).catch((err) => {
+          console.error(`[recall] Cognee rememberQaEntry failed (non-fatal) session=${sessionId}:`, err);
+        });
+      }
 
-          // Use Python wrapper for metadata support (P1 workaround)
-          await addWithMetadata(chunkText, metadata).catch(() => {
-            // Fallback to simple add without metadata
-            return add(chunkText);
-          });
-
-          // Fire-and-forget cognify (scheduled periodically instead)
-          // Cognify is called by a scheduler, not per-turn (P5 finding)
+      // Three-channel capture: QA + traces. Persist per-tool-call TraceEntry
+      // rows sequentially (await each; indexExchange is itself fire-and-forget
+      // from the caller, so this never blocks the reply) so improve() can run
+      // agent-context extraction → distill from trace-derived agent lessons.
+      for (const step of collectTraceSteps(assistantMessages)) {
+        try {
+          await rememberTraceEntry(step, sessionId);
+        } catch (err) {
+          console.error(`[recall] Cognee rememberTraceEntry failed (non-fatal) session=${sessionId} fn=${step.origin_function}:`, err);
         }
-      } catch (err) {
-        console.error("[recall] Cognee store failed:", err);
-        // Non-fatal — SQLite already has the data
       }
     }
 
-    console.log(`[recall] Indexed exchange (${chunkText.length} chars) for chat=${chatId}`);
+    console.log(`[recall] Indexed exchange (${chunkText.length} chars) for chat=${chatId}${sessionId ? ` session=${sessionId}` : ""}`);
   } catch (err) {
     console.error("[recall] Failed to index exchange:", err);
   }
@@ -160,6 +176,32 @@ function logShadowComparison(
   } catch { /* non-fatal */ }
 }
 
+/**
+ * Extract the final assistant reply text from a set of messages.
+ * Local copy of agent.extractTextFromResponse — inlined here to avoid a
+ * memory → agent → tools → memory import cycle (agent.ts imports tools, which
+ * imports memory/index; a cycle there breaks eval.ts and any direct memory
+ * import at module-evaluation time).
+ */
+function extractReplyText(messages: Message[], skipAssistantMessages = 0): string {
+  const allTextParts: string[] = [];
+  let assistantIndex = 0;
+  for (const msg of messages) {
+    if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      assistantIndex++;
+      if (assistantIndex <= skipAssistantMessages) continue;
+      const textParts = msg.content
+        .filter((b): b is { type: "text"; text: string } => b.type === "text")
+        .map((b) => b.text);
+      allTextParts.push(...textParts);
+    }
+  }
+  if (allTextParts.length > 0) {
+    return allTextParts.join("\n");
+  }
+  return "(no response)";
+}
+
 function formatExchange(userText: string, assistantMessages: Message[]): string {
   const parts: string[] = [`User: ${userText}`];
 
@@ -189,4 +231,124 @@ function formatExchange(userText: string, assistantMessages: Message[]): string 
   }
 
   return parts.join("\n");
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Trace capture (plan delta): per-tool-call TraceEntry rows persisted to the
+// Cognee session cache so improve()'s agent-context extraction can produce
+// gated agent-profile lessons (distillation becomes live). Pure helpers — no
+// I/O — mirror the backfill logic in cognee/scripts/backfill_sessions.py
+// (build_trace_steps). Keep both in lock-step.
+// ═════════════════════════════════════════════════════════════════════════
+
+const TRACE_PARAMS_MAX = 1000;         // cap on stringified method_params
+const TRACE_RETURN_MAX = 2000;         // cap on stringified method_return_value
+const TRACE_SECRETS_TOOL = "vaultwarden";
+const TRACE_SECRETS_REDACTED = "[redacted — secrets tool]";
+
+/**
+ * Stringify a tool_result content payload for persistence: string → as-is;
+ * block array → joined text-block text, else JSON.stringify of the remaining
+ * (non-text) blocks. Returns "" when there is nothing meaningful (empty array
+ * or empty string) so callers can skip entries with no content at all.
+ */
+function stringifyToolContent(content: string | ContentBlock[]): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const textParts = content
+      .filter((b): b is TextBlock => b.type === "text")
+      .map((b) => b.text);
+    if (textParts.length > 0) return textParts.join("\n");
+    // No text blocks — JSON-stringify any remaining (non-text) blocks.
+    const nonText = content.filter((b) => b.type !== "text");
+    if (nonText.length === 0) return ""; // truly empty — no content at all
+    return JSON.stringify(content);
+  }
+  return "";
+}
+
+/**
+ * Bound method_params to a dict. Cognee's TraceEntry REQUIRES a dict (a
+ * stringified JSON string is rejected by pydantic with a 422 dict_type error —
+ * verified against installed Cognee 1.4.0). Under the cap the raw input object
+ * is sent as-is; oversized inputs are replaced with a marker dict carrying a
+ * truncated stringified preview (same marker pattern as the vaultwarden
+ * redaction {"redacted":true}).
+ */
+function buildMethodParams(input: Record<string, unknown>): Record<string, unknown> {
+  const raw = JSON.stringify(input ?? {});
+  if (raw.length <= TRACE_PARAMS_MAX) return { ...input };
+  return { truncated: true, preview: raw.slice(0, TRACE_PARAMS_MAX) };
+}
+
+/**
+ * Collect agent trace steps from a turn's messages. Pairs each assistant
+ * tool_use block with its tool_result (found in user-role messages by
+ * tool_use_id) and emits one CogneeTraceEntry per call.
+ *
+ * - status = result.is_error ? "error" : "success"
+ * - method_params = bounded dict of block.input (see buildMethodParams)
+ * - method_return_value = stringified result.content, truncated to 2000 chars
+ * - error_message = same stringified content when is_error, else ""
+ * - vaultwarden (secrets) tool is redacted
+ * - orphaned tool_use blocks (no matching result) and entries with no content
+ *   are skipped
+ */
+export function collectTraceSteps(messages: Message[]): CogneeTraceEntry[] {
+  // tool_use_id → tool_result, from ALL user-role messages.
+  const results = new Map<string, ToolResultBlock>();
+  for (const msg of messages) {
+    if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type === "tool_result") {
+        results.set(block.tool_use_id, block as ToolResultBlock);
+      }
+    }
+  }
+
+  const steps: CogneeTraceEntry[] = [];
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type !== "tool_use") continue;
+      const toolUse = block as ToolUseBlock;
+      const result = results.get(toolUse.id);
+      if (!result) continue; // orphaned — skip
+
+      const isError = result.is_error === true;
+      const originFunction = toolUse.name;
+      if (!originFunction) continue;
+
+      let step: CogneeTraceEntry;
+      if (originFunction === TRACE_SECRETS_TOOL) {
+        step = {
+          type: "trace",
+          origin_function: originFunction,
+          status: isError ? "error" : "success",
+          method_params: { redacted: true },
+          method_return_value: TRACE_SECRETS_REDACTED,
+          error_message: isError ? TRACE_SECRETS_REDACTED : "",
+          generate_feedback_with_llm: false,
+        };
+      } else {
+        const returnValue = stringifyToolContent(result.content);
+        const truncatedReturn =
+          returnValue.length > TRACE_RETURN_MAX ? returnValue.slice(0, TRACE_RETURN_MAX) : returnValue;
+        step = {
+          type: "trace",
+          origin_function: originFunction,
+          status: isError ? "error" : "success",
+          method_params: buildMethodParams(toolUse.input),
+          method_return_value: truncatedReturn,
+          error_message: isError ? truncatedReturn : "",
+          generate_feedback_with_llm: false,
+        };
+      }
+
+      // Skip entries with no content at all.
+      if (!step.method_return_value || !step.method_return_value.trim()) continue;
+      steps.push(step);
+    }
+  }
+  return steps;
 }

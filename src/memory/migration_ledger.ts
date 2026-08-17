@@ -13,6 +13,9 @@ export function initMigrationLedger(): void {
   const dbPath = path.join(config.workspace, "patronum.db");
   db = new Database(dbPath);
 
+  // VESTIGIAL: cognee_migration_ledger tracked the legacy add()→cognify()
+  // pipeline. The memory redesign (sessions → improve) supersedes it; the
+  // cognify_status/checked_at columns are no longer driven by any write path.
   db.exec(`
     CREATE TABLE IF NOT EXISTS cognee_migration_ledger (
       patronum_chunk_id INTEGER PRIMARY KEY,

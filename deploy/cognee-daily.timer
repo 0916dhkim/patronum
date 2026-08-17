@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Patronum Cognee Daily Improve at 00:10 and 00:40 America/New_York
+Documentation=https://github.com/PatronumAI/patronum
+
+[Timer]
+# 00:10 primary + 00:40 catch-up (midnight-spanning turns land late in the
+# prior NY-day; the 00:40 run picks them up). Timezone is America/New_York.
+OnCalendar=*-*-* 00:10:00 America/New_York
+OnCalendar=*-*-* 00:40:00 America/New_York
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
