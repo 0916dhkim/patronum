@@ -5,7 +5,6 @@
 
 import { anthropicClient } from "./anthropic.js";
 import { openrouterClient } from "./openrouter.js";
-import { config } from "../config.js";
 import type { Message, ClaudeResponse, StreamEvent, ToolDefinition } from "../types.js";
 
 /**

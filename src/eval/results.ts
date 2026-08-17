@@ -47,12 +47,3 @@ export function loadRecentResults(n: number): EvalRun[] {
     })
     .filter((r) => r !== null) as EvalRun[];
 }
-
-/**
- * Load a specific result file by filename
- */
-export function loadResultFile(filename: string): EvalRun {
-  const filePath = path.join(config.workspace, "tests", "results", filename);
-  const content = readFileSync(filePath, "utf-8");
-  return JSON.parse(content) as EvalRun;
-}

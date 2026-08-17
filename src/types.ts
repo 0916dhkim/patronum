@@ -6,7 +6,7 @@ export interface TextBlock {
   cache_control?: CacheControl;
 }
 
-export interface ImageBlock {
+interface ImageBlock {
   type: "image";
   source: {
     type: "base64";
@@ -43,7 +43,7 @@ export interface RedactedThinkingBlock {
 
 export type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | ThinkingBlock | RedactedThinkingBlock;
 
-export interface CacheControl {
+interface CacheControl {
   type: "ephemeral";
   ttl?: "5m" | "1h";
 }
@@ -98,7 +98,7 @@ export interface ToolHandler {
 
 // --- Claude Streaming SSE Event Types ---
 
-export interface StreamMessageStart {
+interface StreamMessageStart {
   type: "message_start";
   message: {
     id: string;
@@ -111,7 +111,7 @@ export interface StreamMessageStart {
   };
 }
 
-export interface StreamContentBlockStart {
+interface StreamContentBlockStart {
   type: "content_block_start";
   index: number;
   content_block:
@@ -121,7 +121,7 @@ export interface StreamContentBlockStart {
     | { type: "redacted_thinking"; data: string };
 }
 
-export interface StreamContentBlockDelta {
+interface StreamContentBlockDelta {
   type: "content_block_delta";
   index: number;
   delta:
@@ -132,12 +132,12 @@ export interface StreamContentBlockDelta {
     | { type: "redacted_thinking"; data: string };
 }
 
-export interface StreamContentBlockStop {
+interface StreamContentBlockStop {
   type: "content_block_stop";
   index: number;
 }
 
-export interface StreamMessageDelta {
+interface StreamMessageDelta {
   type: "message_delta";
   delta: { stop_reason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" };
   usage: {
@@ -159,11 +159,11 @@ export interface StreamMessageDelta {
   reasoning_details?: unknown[];
 }
 
-export interface StreamMessageStop {
+interface StreamMessageStop {
   type: "message_stop";
 }
 
-export interface StreamPing {
+interface StreamPing {
   type: "ping";
 }
 

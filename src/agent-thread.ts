@@ -115,18 +115,7 @@ export function appendToAgentThread(
   ).run(id, threadId, author, content, timestamp);
 }
 
-export function getThreadMessageCount(threadId: string): number {
-  const result = db
-    .prepare(
-      `SELECT COUNT(*) as count FROM agent_thread_messages
-       WHERE thread_id = ?`
-    )
-    .get(threadId) as { count: number } | undefined;
-
-  return result?.count ?? 0;
-}
-
-export function loadAgentThread(
+function loadAgentThread(
   threadId: string
 ): Array<{ author: string; content: string; timestamp: number }> {
   const rows = db
@@ -151,7 +140,7 @@ export function formatAgentThread(threadId: string, name: string): string {
   return `[Agent Thread: "${name}"]\n\n${lines.join("\n")}`;
 }
 
-export interface ActiveThread {
+interface ActiveThread {
   id: string;
   name: string;
   messageCount: number;
@@ -181,17 +170,6 @@ export function listActiveThreads(chatId: string): ActiveThread[] {
   return rows;
 }
 
-export function closeThread(chatId: string, name: string): boolean {
-  const result = db
-    .prepare(
-      `UPDATE agent_threads SET status = 'closed', closed_at = ?
-       WHERE chat_id = ? AND name = ? AND status = 'active'`
-    )
-    .run(Date.now(), chatId, name);
-
-  return result.changes > 0;
-}
-
 /**
  * Persist the full sanitized message array from a subagent run to the database.
  * This is called at the end of runAgentWithThread, whether the run succeeds or fails.
@@ -217,34 +195,4 @@ export function persistSubagentMessages(
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[persist] Failed to write subagent messages for thread ${threadId}: ${message}`);
   }
-}
-
-/**
- * Load subagent internal messages for a given thread, optionally filtered by agent name.
- * Returns an array of { agentName, messages } objects.
- */
-export function loadSubagentMessages(
-  threadId: string,
-  agentNameFilter?: string
-): Array<{ agentName: string; messages: Message[] }> {
-  const query = agentNameFilter
-    ? `SELECT agent_name, internal_messages_json
-       FROM subagent_internal_messages
-       WHERE thread_id = ? AND agent_name = ?
-       ORDER BY rowid ASC`
-    : `SELECT agent_name, internal_messages_json
-       FROM subagent_internal_messages
-       WHERE thread_id = ?
-       ORDER BY rowid ASC`;
-
-  const rows = (
-    agentNameFilter
-      ? db.prepare(query).all(threadId, agentNameFilter)
-      : db.prepare(query).all(threadId)
-  ) as Array<{ agent_name: string; internal_messages_json: string }>;
-
-  return rows.map((row) => ({
-    agentName: row.agent_name,
-    messages: JSON.parse(row.internal_messages_json) as Message[],
-  }));
 }

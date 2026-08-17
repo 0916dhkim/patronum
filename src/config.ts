@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { parse } from "smol-toml";
 
-export interface Config {
+interface Config {
   telegramBotToken: string;
   claudeToken: string;
   claudeModel: string;
@@ -112,7 +112,7 @@ export async function initConfig(): Promise<void> {
           const value = line.substring(colonIdx + 2).trim();
           if (value) {
             config.cogneeApiKey = value;
-            // Also export to environment for subprocesses (addWithMetadata Python wrapper)
+            // Also export to environment for subprocesses (Cognee runtime scripts)
             process.env.COGNEE_API_KEY = value;
           }
           break;
@@ -257,7 +257,7 @@ export function getAgentOverrides(): Record<string, { model?: string; reasoningE
   return result;
 }
 
-export interface ModelRoutingConfig {
+interface ModelRoutingConfig {
   providerOrder?: string[];
   quantizations?: string[];
   allowFallbacks?: boolean;

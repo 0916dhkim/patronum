@@ -3,12 +3,9 @@
  * Routes to Cognee when backend=cognee, falls back to SQLite otherwise.
  */
 
-import { embed, embedQuery } from "./embeddings.js";
-import { storeChunk, searchChunks, type MemorySearchResult } from "./store.js";
+import { embed } from "./embeddings.js";
+import { storeChunk } from "./store.js";
 import {
-  health,
-  recall,
-  formatRecallResults,
   rememberQaEntry,
   rememberTraceEntry,
   type CogneeTraceEntry,
@@ -19,66 +16,8 @@ import { config } from "../config.js";
 // Read feature flags from config (added to config.ts)
 // These will be set from patronum.toml via the config module
 const memoryBackend = () => (config as any).memoryBackend || "sqlite";
-const shadowRead = () => (config as any).shadowRead === true;
 const dualWrite = () => (config as any).dualWrite === true;
 
-const AUTO_RECALL_TOP_K = 6;
-
-/**
- * Auto-recall: given the user's message, find relevant past context.
- */
-export async function autoRecall(userText: string): Promise<string | null> {
-  try {
-    const backend = memoryBackend();
-
-    // Cognee path (Phase 2d) or shadow read (Phase 2b)
-    if (backend === "cognee" || shadowRead()) {
-      const cogneeUp = await health();
-      if (cogneeUp && (backend === "cognee" || shadowRead())) {
-        try {
-          // High-level recall: minimal { query, datasets } request body.
-          // No forced search_type/only_context/top_k — Cognee chooses strategy.
-          const results = await recall(userText);
-
-          if (results.length > 0) {
-            const formatted = formatRecallResults(results);
-            const context = `[Memory — relevant past context]\n\n${formatted}`;
-
-            // If shadow read, also log comparison
-            if (shadowRead() && backend !== "cognee") {
-              // Fire and forget SQLite recall for comparison
-              try {
-                const queryVec = await embedQuery(userText);
-                const sqliteResults = searchChunks(queryVec, { topK: AUTO_RECALL_TOP_K });
-                logShadowComparison(userText, results, sqliteResults);
-              } catch { /* non-fatal */ }
-            }
-
-            return context;
-          }
-        } catch (err) {
-          console.error("[recall] Cognee recall failed, falling back to SQLite:", err);
-          // Fall through to SQLite fallback
-        }
-      }
-    }
-
-    // SQLite path (legacy or fallback)
-    const queryVec = await embedQuery(userText);
-    const results = searchChunks(queryVec, { topK: AUTO_RECALL_TOP_K });
-
-    if (results.length === 0) return null;
-
-    const formatted = results
-      .map((r, i) => `[${i + 1}] ${r.chunkText}`)
-      .join("\n\n---\n\n");
-
-    return `[Memory — relevant past context]\n\n${formatted}`;
-  } catch (err) {
-    console.error("[recall] Auto-recall failed:", err);
-    return null;
-  }
-}
 
 /**
  * Index a conversation exchange into the vector store(s).
@@ -143,37 +82,6 @@ export async function indexExchange(
   } catch (err) {
     console.error("[recall] Failed to index exchange:", err);
   }
-}
-
-/**
- * Log shadow comparison data for quality evaluation.
- */
-function logShadowComparison(
-  query: string,
-  cogneeResults: any[],
-  sqliteResults: MemorySearchResult[]
-): void {
-  const overlap = cogneeResults.filter(cr =>
-    sqliteResults.some(sr => sr.chunkText === cr.text)
-  ).length;
-
-  const entry = {
-    timestamp: new Date().toISOString(),
-    query,
-    cognee_count: cogneeResults.length,
-    sqlite_count: sqliteResults.length,
-    overlap,
-    cognee_latency_ms: 0, // Filled by caller if measured
-    sqlite_latency_ms: 0,
-  };
-
-  // Write to a log file for later analysis
-  try {
-    const fs = require("node:fs");
-    const path = require("node:path");
-    const logFile = path.join(config.workspace, "logs", "shadow-read-metrics.jsonl");
-    fs.appendFileSync(logFile, JSON.stringify(entry) + "\n", "utf-8");
-  } catch { /* non-fatal */ }
 }
 
 /**
@@ -294,7 +202,7 @@ function buildMethodParams(input: Record<string, unknown>): Record<string, unkno
  * - orphaned tool_use blocks (no matching result) and entries with no content
  *   are skipped
  */
-export function collectTraceSteps(messages: Message[]): CogneeTraceEntry[] {
+function collectTraceSteps(messages: Message[]): CogneeTraceEntry[] {
   // tool_use_id → tool_result, from ALL user-role messages.
   const results = new Map<string, ToolResultBlock>();
   for (const msg of messages) {

@@ -9,7 +9,7 @@ import path from "node:path";
 import { config } from "../config.js";
 import type { ToolHandler } from "../types.js";
 
-export interface RestartState {
+interface RestartState {
   reason: string;
   resumeContext: string;
   chatId: string;

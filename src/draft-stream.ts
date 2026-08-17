@@ -5,7 +5,7 @@ import { markdownToTelegramHtml } from "./format.js";
 // Error classification
 // ---------------------------------------------------------------------------
 
-export type DraftErrorClass =
+type DraftErrorClass =
   | { type: "rate_limited"; retryAfter: number; original: unknown }
   | { type: "transient_network"; original: unknown }
   | { type: "content_error"; original: unknown }
@@ -161,7 +161,7 @@ function redactToken(text: string): string {
  * Optional constructor overrides. All are test seams — production defaults are
  * the static constants below. No production call site passes these.
  */
-export interface DraftStreamerOptions {
+interface DraftStreamerOptions {
   /** Per-flush abort deadline in ms (default 5000). */
   draftDeadlineMs?: number;
   /** Minimum gap between flushes in ms (default 1000). */

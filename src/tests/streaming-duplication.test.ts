@@ -251,7 +251,6 @@ section("C. Turn-simulation contract test");
   ];
 
   // Simulate onToolStart("self_restart", 1) — 1 assistant message at boundary
-  const assistantMessageCount = 1;
   const flushedCount = 1; // flush succeeded
 
   // Final extraction with skip

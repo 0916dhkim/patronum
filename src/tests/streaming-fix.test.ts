@@ -353,7 +353,7 @@ section("C. Serialization / coalescing");
   const secondText = "X".repeat(100) + "Y".repeat(50); // 50 chars longer
   const thirdText = "X".repeat(100) + "Y".repeat(50) + "Z".repeat(50); // 100 chars longer
 
-  const bot = makeStubBot((method: string, payload: any) => {
+  const bot = makeStubBot((_method: string, payload: any) => {
     sentTexts.push(payload.text || "");
     if (sentTexts.length === 1) {
       // First call: hold until we explicitly resolve
@@ -402,7 +402,7 @@ section("C. Serialization / coalescing");
   resetState();
   const sentTexts: string[] = [];
 
-  const bot = makeStubBot((method: string, payload: any) => {
+  const bot = makeStubBot((_method: string, payload: any) => {
     sentTexts.push(payload.text || "");
     return Promise.resolve({ ok: true });
   });
@@ -429,7 +429,7 @@ section("D. Deadline / AbortSignal behavior");
   resetState();
   let signalReceived: AbortSignal | undefined;
 
-  const bot = makeStubBot((method: string, payload: any, opts?: any) => {
+  const bot = makeStubBot((_method: string, _payload: any, opts?: any) => {
     signalReceived = opts?.signal;
     if (signalReceived?.aborted) {
       return Promise.reject(new Error("The operation was aborted"));
@@ -452,7 +452,7 @@ section("D. Deadline / AbortSignal behavior");
   let abortedDueToDeadline: boolean = false;
   let callCount = 0;
 
-  const bot = makeStubBot((method: string, payload: any, opts?: any) => {
+  const bot = makeStubBot((_method: string, _payload: any, opts?: any) => {
     callCount++;
     // First call: hang forever unless the deadline aborts it. Later calls
     // (recovery) resolve immediately.
@@ -503,7 +503,7 @@ section("E. Per-turn cap");
   };
 
   try {
-    const bot = makeStubBot((method: string, payload: any) => {
+    const bot = makeStubBot((_method: string, payload: any) => {
       sentPayloads.push(payload);
       return Promise.resolve({ ok: true });
     });
@@ -598,7 +598,7 @@ section("F. Invariant regressions");
 
   // Verify by checking callApi payloads
   const sentDraftIds: number[] = [];
-  const bot = makeStubBot((method: string, payload: any) => {
+  const bot = makeStubBot((_method: string, payload: any) => {
     sentDraftIds.push(payload.draft_id);
     return Promise.resolve({ ok: true });
   });
@@ -670,7 +670,7 @@ section("G. Finalize vs in-flight race (fix A)");
         sendMessageCount++;
         return { message_id: 42 };
       },
-      callApi: (method: string, payload: any, opts?: any) => {
+      callApi: (method: string, _payload: any, opts?: any) => {
         if (method === "sendMessageDraft") {
           draftCallCount++;
           // Hang forever unless the signal aborts it (like real node-fetch)
@@ -709,7 +709,7 @@ section("G. Finalize vs in-flight race (fix A)");
   const sentTexts: string[] = [];
   let resolveFirstFlush: (() => void) | null = null;
 
-  const bot = makeStubBot((method: string, payload: any) => {
+  const bot = makeStubBot((_method: string, payload: any) => {
     sentTexts.push(payload.text || "");
     if (sentTexts.length === 1) {
       return new Promise((resolve) => {

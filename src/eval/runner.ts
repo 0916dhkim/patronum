@@ -9,7 +9,7 @@ import { gradeAssertions, GradeResult } from "./grader.js";
 import { config } from "../config.js";
 import { logUsage, getTotalInputTokens } from "../prompt-cache.js";
 import { callLLM } from "../providers/index.js";
-import type { Message, ToolUseBlock, ClaudeResponse, ContentBlock } from "../types.js";
+import type { Message, ToolUseBlock, ContentBlock } from "../types.js";
 import type { PromptOverrides } from "../eval.js";
 
 export interface TestResult {

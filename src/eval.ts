@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import { initConfig, config } from "./config.js";
 import { initMemoryStore, initEmbeddings } from "./memory/index.js";
 import { loadAllTests, loadTest, filterByTags, type EvalTest } from "./eval/loader.js";
-import { runAllTests, runTest } from "./eval/runner.js";
+import { runAllTests } from "./eval/runner.js";
 import { saveResults, loadRecentResults } from "./eval/results.js";
 import { compareRuns } from "./eval/compare.js";
 import type { Message } from "./types.js";

@@ -327,7 +327,7 @@ section("Context window resolution — model API returns context_length");
   const messages = makeMessages(50);
   let modelApiCalled = false;
   const origFetch = globalThis.fetch;
-  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+  globalThis.fetch = ((url: string | URL | Request) => {
     const urlStr = typeof url === "string" ? url : url.toString();
     if (urlStr.includes("/api/v1/model/")) {
       modelApiCalled = true;
@@ -639,7 +639,7 @@ restoreFetch();
 section("Hierarchical merge — merge API error preserves history");
 {
   const messages = makeLargeMessages(60, 600);
-  const state = mockFetchForMerge(
+  mockFetchForMerge(
     20_000,
     "## Current Objective\nChunk summary.",
     "## Current Objective\nMerged summary.",

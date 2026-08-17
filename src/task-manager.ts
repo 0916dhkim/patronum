@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentDef } from "./agents.js";
 
-export interface AgentTask {
+interface AgentTask {
   taskId: string;
   agent: string;
   agentDef: AgentDef;

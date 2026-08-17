@@ -8,14 +8,10 @@ import type {
   Message,
   ClaudeResponse,
   ContentBlock,
-  TextBlock,
   ToolUseBlock,
   ToolResultBlock,
-  ThinkingBlock,
-  RedactedThinkingBlock,
   StreamEvent,
   ToolDefinition,
-  ClaudeUsage,
 } from "../types.js";
 
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -88,22 +84,6 @@ function stripClaudeIdentity(systemPrompt: Array<{ type: "text"; text: string }>
         .trim(),
     }))
     .filter((block) => block.text.length > 0);
-}
-
-/**
- * Strip cache_control markers (OpenRouter has no equivalent).
- */
-function stripCacheControl(content: string): string {
-  // Simple regex to remove cache_control markers from JSON
-  // This is a crude approach but works for the prepareSystemPromptForClaude output
-  return content.replace(/"cache_control":\s*{[^}]*}/g, "");
-}
-
-/**
- * Remove thinking blocks (OpenRouter models don't expose thinking).
- */
-function stripThinkingBlocks(content: ContentBlock[]): ContentBlock[] {
-  return content.filter((b) => b.type !== "thinking" && b.type !== "redacted_thinking");
 }
 
 /**

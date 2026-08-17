@@ -1,4 +1,4 @@
-import { getAgentDef, type AgentDef } from "./agents.js";
+import type { AgentDef } from "./agents.js";
 import { getToolDefinitions, executeTool, setCurrentChatId, setSkillOverrides } from "./tools/index.js";
 import { buildSkillsSummary } from "./skills.js";
 import { logUsage } from "./prompt-cache.js";

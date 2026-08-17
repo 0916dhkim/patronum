@@ -2,7 +2,7 @@
  * Cognee integration tests (G1–G10).
  * Runs with: npx tsx src/memory/cognee.test.ts
  *
- * Tests Cognee client health, recall (high-level), add, cognify, auth, fallback,
+ * Tests Cognee client health, recall (high-level), auth, fallback,
  * feature flag defaults, rollback behavior, and result format preservation.
  *
  * Uses isolated synthetic data — no real Patronum data affected.
@@ -81,25 +81,18 @@ async function main() {
   });
 
   // ===== G5: Module exports =====
-  await run("G5a: cognee_client exports all expected functions", async () => {
+  await run("G5a: cognee_client exports the redesign surface", async () => {
     const mod = await import("./cognee_client.js");
     assert.equal(typeof mod.health, "function");
     assert.equal(typeof mod.recall, "function");
-    assert.equal(typeof mod.remember, "function");
-    assert.equal(typeof mod.add, "function");
-    assert.equal(typeof mod.cognify, "function");
-    assert.equal(typeof mod.forget, "function");
-    assert.equal(typeof mod.addWithMetadata, "function");
     assert.equal(typeof mod.formatRecallResults, "function");
+    assert.equal(typeof mod.rememberQaEntry, "function");
+    assert.equal(typeof mod.rememberTraceEntry, "function");
   });
 
-  await run("G5b: migration_ledger exports all expected functions", async () => {
+  await run("G5b: migration_ledger exports initMigrationLedger", async () => {
     const mod = await import("./migration_ledger.js");
     assert.equal(typeof mod.initMigrationLedger, "function");
-    assert.equal(typeof mod.recordIngestion, "function");
-    assert.equal(typeof mod.isChunkIngested, "function");
-    assert.equal(typeof mod.getPendingChunks, "function");
-    assert.equal(typeof mod.getLedgerCount, "function");
   });
 
   // ===== G6: Recall result formatting =====
@@ -182,12 +175,6 @@ async function main() {
     assert.ok(formatted.includes("plain result"), "Should show text");
   });
 
-  // ===== G7: Migration ledger =====
-  await run("G7: isChunkIngested function exists", async () => {
-    const { isChunkIngested } = await import("./migration_ledger.js");
-    assert.equal(typeof isChunkIngested, "function");
-  });
-
   // ===== G8: Rollback config =====
   await run("G8: Rollback config produces sqlite-only mode", () => {
     const rollbackConfig = {
@@ -208,9 +195,6 @@ async function main() {
   });
 
   await run("G9b: CogneeRecallResult interface preserves all fields", async () => {
-    // Verify import is available
-    const mod = await import("./cognee_client.js");
-    // The interface is used via the function return type
     // Construct a full CogneeRecallResult to verify shape
     const fullResult: import("./cognee_client.js").CogneeRecallResult = {
       kind: "chunk",
@@ -258,18 +242,19 @@ async function main() {
     );
   });
 
-  await run("G10c: recall() timeout error is caught and falls back to SQLite", async () => {
+  await run("G10c: SQLite write is unconditional — Cognee session-cache failures are non-fatal", async () => {
     const fs = await import("node:fs");
     const source = fs.readFileSync(`${ROOT}/recall.cognee.ts`, "utf-8");
-    assert.ok(source.includes("catch (err)"), "recall.cognee.ts must wrap recall() in try-catch");
+    // The SQLite chunk write is unconditional (backup path) — it never depends on Cognee.
     assert.ok(
-      source.includes("falling back to SQLite"),
-      "recall.cognee.ts must log fallback message"
+      source.includes("storeChunk(chatId, chunkText, embedding, { turnNumber })"),
+      "recall.cognee.ts must always write the chunk to SQLite"
     );
-    const sqlitePattern = /catch\s*\(err\)[\s\S]{0,500}SQLite/i;
+    // Cognee session-cache writes (rememberQaEntry/rememberTraceEntry) are fail-open:
+    // a Cognee error must never break the reply, only log.
     assert.ok(
-      sqlitePattern.test(source),
-      "recall.cognee.ts must have SQLite fallback after Cognee error"
+      source.includes("catch (err)") && source.includes("non-fatal"),
+      "recall.cognee.ts must catch Cognee session-cache write errors and log non-fatal"
     );
   });
 

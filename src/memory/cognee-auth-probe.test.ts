@@ -1,7 +1,7 @@
 /**
  * Cognee Vaultwarden auth probe test.
  * Validates that Patronum's config init correctly fetches the Cognee API key
- * from Vaultwarden using the item name "Cognee API Key (Current)".
+ * from Vaultwarden using the item name "Cognee API Key v4".
  *
  * This is a runtime integration test that exercises the real Vaultwarden
  * lookup path — not a unit test with mocks. It proves the auth chain works
@@ -35,11 +35,11 @@ async function main() {
     const { initConfig, config } = await import("../config.js");
     await initConfig();
     // After initConfig(), config.cogneeApiKey should be non-empty
-    // if Vaultwarden is reachable and the item "Cognee API Key (Current)" exists.
+    // if Vaultwarden is reachable and the item "Cognee API Key v4" exists.
     // This proves the lookup succeeded without printing the key value.
     assert.ok(
       typeof config.cogneeApiKey === "string" && config.cogneeApiKey.length > 0,
-      "cogneeApiKey should be populated from Vaultwarden (item: 'Cognee API Key (Current)')"
+      "cogneeApiKey should be populated from Vaultwarden (item: 'Cognee API Key v4')"
     );
     // Verify it's truly non-empty (key length > 0 is our only non-secret signal)
     assert.ok(config.cogneeApiKey.length > 8, "Key looks like a real credential (not empty/placeholder)");
@@ -67,7 +67,7 @@ async function main() {
 
   // ===== A4: Authenticated recall probe =====
   // This is the HIGH-LEVEL test: proves the key obtained from Vaultwarden
-  // via "Cognee API Key (Current)" actually authenticates to Cognee's
+  // via "Cognee API Key v4" actually authenticates to Cognee's
   // auth-protected /api/v1/recall endpoint.
   await run("A4: Authenticated recall succeeds (proves key is valid)", async () => {
     const { config } = await import("../config.js");
@@ -107,7 +107,7 @@ async function main() {
     const secretsItemName = secretsNameMatch![1];
     assert.equal(
       secretsItemName,
-      "Cognee API Key (Current)",
+      "Cognee API Key v4",
       `vaultwarden_secrets.cjs Cognee item name mismatch: got "${secretsItemName}"`
     );
   });
@@ -129,8 +129,8 @@ async function main() {
     const queryName = queryMatch![1];
     assert.equal(
       queryName,
-      "Cognee API Key (Current)",
-      `config.ts Vaultwarden query name mismatch: got "${queryName}" — expected "Cognee API Key (Current)"`
+      "Cognee API Key v4",
+      `config.ts Vaultwarden query name mismatch: got "${queryName}" — expected "Cognee API Key v4"`
     );
   });
 
@@ -151,8 +151,8 @@ async function main() {
     const queryName = queryMatch![1];
     assert.equal(
       queryName,
-      "Cognee API Key (Current)",
-      `bot.ts Vaultwarden query name mismatch: got "${queryName}" — expected "Cognee API Key (Current)"`
+      "Cognee API Key v4",
+      `bot.ts Vaultwarden query name mismatch: got "${queryName}" — expected "Cognee API Key v4"`
     );
   });
 

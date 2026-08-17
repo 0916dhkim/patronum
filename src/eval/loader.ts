@@ -17,7 +17,7 @@ export type ContentBlock =
         }
     >;
 
-export interface EvalTestInput {
+interface EvalTestInput {
   history?: Array<{ role: "user" | "assistant"; content: ContentBlock }>;
   history_file?: string;
   message?: string;
@@ -339,7 +339,7 @@ function validateTest(test: unknown, filename: string): EvalTest {
   };
 }
 
-export interface LoadResult {
+interface LoadResult {
   tests: EvalTest[];
   errors: Array<{ file: string; message: string }>;
 }

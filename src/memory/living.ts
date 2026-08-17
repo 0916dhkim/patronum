@@ -27,7 +27,7 @@ const VALID_SECTIONS = [
   "open_items",
 ] as const;
 
-export type LivingMemorySection = typeof VALID_SECTIONS[number];
+type LivingMemorySection = typeof VALID_SECTIONS[number];
 
 // Entry-level limits
 const MAX_KEY_LENGTH = 100;
@@ -35,7 +35,6 @@ const MAX_VALUE_LENGTH = 2000;
 
 // Token budget
 const TOTAL_CHAR_BUDGET = 6000; // ~1,500 tokens at ~4 chars/token
-const CHARS_PER_TOKEN = 4;
 
 // Per-section max entries (render-time limit)
 const SECTION_MAX_ENTRIES: Record<LivingMemorySection, number> = {
@@ -211,7 +210,7 @@ function recordRevision(
 // Public API: CRUD operations
 // ---------------------------------------------------------------------------
 
-export interface LivingMemoryUpdateInput {
+interface LivingMemoryUpdateInput {
   action: "create" | "update" | "supersede" | "expire" | "reactivate" | "list";
   section: string;
   key: string;
@@ -222,7 +221,7 @@ export interface LivingMemoryUpdateInput {
   chat_id?: string; // defaults to current chat
 }
 
-export interface LivingMemoryUpdateResult {
+interface LivingMemoryUpdateResult {
   success: boolean;
   message: string;
   entry?: {
@@ -645,7 +644,7 @@ function doList(
 // Rendering
 // ---------------------------------------------------------------------------
 
-export interface LivingMemoryEntry {
+interface LivingMemoryEntry {
   id: number;
   section: string;
   key: string;
@@ -802,44 +801,10 @@ export function renderLivingMemory(chatId: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Post-turn Refresh
-// ---------------------------------------------------------------------------
-
-/**
- * Check if the last turn's exchange should trigger a Living Memory update.
- * This is a lightweight, fire-and-forget LLM call that runs after each turn.
- * If the agent already called living_memory_update during this turn, skip.
- *
- * @param chatId - Current chat
- * @param userText - The user's message text
- * @param assistantResponse - The assistant's response text
- * @param agentCalledUpdate - Whether the agent already called living_memory_update this turn
- */
-export async function refreshLivingMemory(
-  chatId: string,
-  userText: string,
-  assistantResponse: string,
-  agentCalledUpdate: boolean,
-): Promise<void> {
-  // If agent already updated Living Memory, skip refresh
-  if (agentCalledUpdate) {
-    console.log(`[living-memory] Refresh skipped — agent already updated Living Memory`);
-    return;
-  }
-
-  console.log(`[living-memory] Post-turn refresh triggered for chat=${chatId}`);
-  // Note: The actual LLM refresh call is lightweight and reuses the compaction prompt pattern.
-  // For now, we log the opportunity and let the next turn handle any stale info.
-  // The full LLM-based refresh will be implemented in a follow-up.
-  // For the initial cutover, the agent is expected to call living_memory_update explicitly
-  // when it discovers new information worth remembering.
-}
-
-// ---------------------------------------------------------------------------
 // Diagnostics
 // ---------------------------------------------------------------------------
 
-export interface LivingMemoryStats {
+interface LivingMemoryStats {
   totalEntries: number;
   activeEntries: number;
   supersededEntries: number;

@@ -94,16 +94,6 @@ export function initMemoryStore(): void {
   `);
 }
 
-/**
- * Run the Living Memory schema migration (tables created if not exist).
- * Called separately from initMemoryStore() so Living Memory works even
- * when the vector memory system is not initialized (no Voyage API key).
- */
-export function initLivingMemoryStore(): void {
-  // Import dynamically to avoid circular dependency
-  const { migrateLivingMemory } = require("./living.js");
-  migrateLivingMemory();
-}
 
 /**
  * Store a chunk with its embedding.
@@ -223,24 +213,4 @@ export function searchChunks(
 export function getChunkCount(): number {
   const row = db.prepare(`SELECT COUNT(*) as count FROM memory_chunks`).get() as { count: number };
   return row.count;
-}
-
-export interface ChunkMetadata {
-  chatId: string;
-  chunkText: string;
-  createdAt: string;
-}
-
-/**
- * Look up a chunk by ID.
- * Returns metadata needed for adjacent message fetch, or null if not found.
- */
-export function getChunkById(chunkId: number): ChunkMetadata | null {
-  const chunk = db
-    .prepare(
-      `SELECT chat_id, chunk_text, created_at FROM memory_chunks WHERE id = ?`
-    )
-    .get(chunkId) as ChunkMetadata | undefined;
-
-  return chunk ?? null;
 }

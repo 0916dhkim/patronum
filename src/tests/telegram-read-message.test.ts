@@ -224,7 +224,6 @@ describe("Telegram Read Message Tool", () => {
     });
 
     it("should reject negative/zero/non-integer message_id", async () => {
-      const { readTelegramMessageTool } = await import("../tools/telegram-read-message.js");
       const tool = (await import("../tools/telegram-read-message.js")).readTelegramMessageTool;
 
       for (const bad of [0, -1, -100, 1.5]) {

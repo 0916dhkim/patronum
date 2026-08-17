@@ -3,7 +3,7 @@ import { HttpsAgent } from "agentkeepalive";
 import { config } from "./config.js";
 import { initSession, loadHistory, saveMessage, replaceHistory, archiveMessages, updateAssistantMessagesTelegramId, updateAssistantMessagesTelegramIdAtOffset } from "./session.js";
 import { initAgentThread, appendToAgentThread } from "./agent-thread.js";
-import { runAgent, runAgentStreaming, extractTextFromResponse, type AgentResult } from "./agent.js";
+import { runAgentStreaming, extractTextFromResponse } from "./agent.js";
 import { DraftStreamer } from "./draft-stream.js";
 import { runAgentWithThread } from "./run-agent.js";
 import { getAgentDef } from "./agents.js";

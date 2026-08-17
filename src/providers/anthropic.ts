@@ -4,7 +4,7 @@
  */
 
 import { config } from "../config.js";
-import { prepareMessagesForClaude, prepareSystemPromptForClaude, logUsage, getTotalInputTokens } from "../prompt-cache.js";
+import { prepareMessagesForClaude, prepareSystemPromptForClaude } from "../prompt-cache.js";
 import type { Message, ClaudeResponse, StreamEvent, ToolDefinition } from "../types.js";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
@@ -25,7 +25,7 @@ const contextWindowCache = new Map<string, number>();
  * Fetch the context window size for a model from the Anthropic models API.
  * Caches results in memory.
  */
-export async function fetchContextWindow(model: string): Promise<number> {
+async function fetchContextWindow(model: string): Promise<number> {
   const cached = contextWindowCache.get(model);
   if (cached !== undefined) return cached;
 

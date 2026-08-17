@@ -15,7 +15,6 @@
  */
 
 import { createHash } from "node:crypto";
-import type { Telegraf } from "telegraf";
 import type { ToolHandler } from "../types.js";
 import type { Message as TgMessage } from "telegraf/types";
 import { config } from "../config.js";
@@ -93,7 +92,7 @@ function getTransport(): TelegramTransport {
 // Error taxonomy
 // ---------------------------------------------------------------------------
 
-export type ReadErrorClass =
+type ReadErrorClass =
   | "INVALID_INPUT"
   | "NOT_AUTHORIZED"
   | "MISCONFIGURED"

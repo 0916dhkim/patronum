@@ -12,12 +12,6 @@ export interface AgentDef {
   reasoningEffort?: string; // OpenRouter reasoning_effort (e.g. "high", "medium", "low")
 }
 
-interface SubagentFrontmatter {
-  name?: string;
-  description?: string;
-  model?: string;
-}
-
 interface ParsedSubagent {
   definition: AgentDef;
   sourcePath: string;
@@ -140,10 +134,6 @@ export function listAgentDefs(): AgentDef[] {
   const agents = Array.from(unique.values()).map((entry) => entry.definition);
   agents.sort((a, b) => a.name.localeCompare(b.name));
   return agents;
-}
-
-export function listAgentNames(): string[] {
-  return listAgentDefs().map((agent) => agent.name);
 }
 
 export function getAgentDef(name: string): AgentDef | undefined {

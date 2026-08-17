@@ -58,7 +58,7 @@ export function initSession(): void {
 // Telegram Read Audit Ledger
 // ---------------------------------------------------------------------------
 
-export interface AuditRowInput {
+interface AuditRowInput {
   requesting_chat: string;
   requested_chat_id: string;
   requested_message_id: number;
@@ -66,7 +66,7 @@ export interface AuditRowInput {
   content_hash: string;
 }
 
-export interface OutstandingRow {
+interface OutstandingRow {
   id: number;
   stage_msg_id: number;
   [key: string]: unknown;
@@ -184,27 +184,6 @@ export function markAuditRowDone(id: number, durationMs: number): void {
          WHERE id = ?`
       )
       .run(durationMs, id);
-  } finally {
-    auditDb.close();
-  }
-}
-
-/**
- * Mark an audit row as failed with a reason.
- */
-export function markAuditRowFailed(id: number, reason: string): void {
-  const dbPath = path.join(config.workspace, "patronum.db");
-  const auditDb = new Database(dbPath);
-  auditDb.pragma("journal_mode = WAL");
-
-  try {
-    auditDb
-      .prepare(
-        `UPDATE telegram_read_audit
-         SET status = 'failed', delete_outcome = ?, updated_at = datetime('now')
-         WHERE id = ?`
-      )
-      .run(reason, id);
   } finally {
     auditDb.close();
   }
@@ -347,59 +326,6 @@ export function replaceHistory(chatId: string, messages: Message[]): void {
 }
 
 /**
- * Extract text content from a message's content_json.
- * Handles both string and array of content blocks.
- */
-function extractTextContent(contentJson: string): string {
-  try {
-    const content = JSON.parse(contentJson);
-
-    if (typeof content === "string") {
-      return content;
-    }
-
-    if (Array.isArray(content)) {
-      const textParts: string[] = [];
-      for (const block of content) {
-        if (block.type === "text") {
-          textParts.push(block.text);
-        }
-      }
-      return textParts.join("\n");
-    }
-  } catch {
-    return "";
-  }
-
-  return "";
-}
-
-/**
- * Update the telegram_message_id for the most recently saved message of a given role in a chat.
- * Used to associate Telegram message IDs with bot messages after sending.
- */
-export function updateLastMessageTelegramId(
-  chatId: string,
-  role: "user" | "assistant",
-  telegramMessageId: number
-): void {
-  const stmt = db.prepare(
-    `SELECT id FROM messages
-     WHERE chat_id = ? AND role = ?
-     ORDER BY id DESC
-     LIMIT 1`
-  );
-  const lastMsg = stmt.get(chatId, role) as { id: number } | undefined;
-
-  if (lastMsg) {
-    db.prepare(`UPDATE messages SET telegram_message_id = ? WHERE id = ?`).run(
-      telegramMessageId,
-      lastMsg.id
-    );
-  }
-}
-
-/**
  * Update the telegram_message_id for N most recent assistant messages in a chat.
  * Used when a Claude turn produces multiple assistant messages that get combined into one Telegram message.
  * All assistant messages from the turn should be stamped with the same Telegram ID for proper context resolution.
@@ -458,157 +384,4 @@ export function updateAssistantMessagesTelegramIdAtOffset(
       updateStmt.run(telegramMessageId, row.id);
     }
   }
-}
-
-/**
- * Look up a message by its Telegram message ID. Returns the role and truncated text content.
- * Used to resolve reply annotations to actual message content.
- * When multiple rows share the same telegram_message_id (e.g., tool_use + text response),
- * returns all rows concatenated in order.
- * Returns null if message not found.
- */
-export function getMessageByTelegramId(
-  chatId: string,
-  telegramMessageId: number
-): { role: "user" | "assistant"; text: string } | null {
-  const rows = db
-    .prepare(
-      `SELECT role, content_json FROM messages
-       WHERE chat_id = ? AND telegram_message_id = ?
-       ORDER BY id ASC`
-    )
-    .all(chatId, telegramMessageId) as Array<{
-      role: string;
-      content_json: string;
-    }>;
-
-  if (rows.length === 0) {
-    return null;
-  }
-
-  try {
-    // Concatenate text from all rows
-    const textParts: string[] = [];
-    let role = rows[0].role; // Use role from first row (should be same for all)
-
-    for (const row of rows) {
-      const content = JSON.parse(row.content_json);
-      let text = "";
-
-      if (typeof content === "string") {
-        text = content;
-      } else if (Array.isArray(content)) {
-        // Extract text from content blocks
-        const blockTexts: string[] = [];
-        for (const block of content) {
-          if (block.type === "text") {
-            blockTexts.push(block.text);
-          }
-        }
-        text = blockTexts.join("\n");
-      }
-
-      if (text.trim()) {
-        textParts.push(text);
-      }
-    }
-
-    let finalText = textParts.join("\n");
-
-    // Remove [Reply to message #...] annotations if present
-    finalText = finalText
-      .replace(/^\[Reply to message #\d+\]\s*/i, "")
-      .trim();
-
-    // Truncate to 200 chars
-    if (finalText.length > 200) {
-      finalText = finalText.substring(0, 200) + "…";
-    }
-
-    return {
-      role: role as "user" | "assistant",
-      text: finalText,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export interface AdjacentMessage {
-  role: "user" | "assistant";
-  text: string;
-  createdAt: string;
-}
-
-/**
- * Find the message with created_at closest to (but not after) the given timestamp,
- * then fetch window messages before and after by id order.
- * Filters to user/assistant roles with text content only.
- * Returns null if no messages found or time gap > 5 minutes.
- * Truncates message text to 500 chars.
- */
-export function getAdjacentMessages(
-  chatId: string,
-  chunkTimestamp: string,
-  window: number = 3
-): AdjacentMessage[] | null {
-  // Find the closest message by created_at (at or before chunk timestamp)
-  const anchorMsg = db
-    .prepare(
-      `SELECT id, created_at FROM messages
-       WHERE chat_id = ? AND created_at <= ?
-       ORDER BY created_at DESC
-       LIMIT 1`
-    )
-    .get(chatId, chunkTimestamp) as { id: number; created_at: string } | undefined;
-
-  if (!anchorMsg) {
-    // No messages found around this timestamp
-    return null;
-  }
-
-  // Check time gap - if anchor message is >5 minutes from chunk, don't return misleading context
-  const chunkTime = new Date(chunkTimestamp).getTime();
-  const anchorTime = new Date(anchorMsg.created_at).getTime();
-  const gapMs = Math.abs(chunkTime - anchorTime);
-  const gapMinutes = gapMs / (1000 * 60);
-
-  if (gapMinutes > 5) {
-    return null;
-  }
-
-  // Fetch window messages before and after by id order
-  const messages = db
-    .prepare(
-      `SELECT id, role, content_json, created_at FROM messages
-       WHERE chat_id = ? AND id >= ? - ? AND id <= ? + ?
-       ORDER BY id ASC`
-    )
-    .all(chatId, anchorMsg.id, window, anchorMsg.id, window) as Array<{
-      id: number;
-      role: string;
-      content_json: string;
-      created_at: string;
-    }>;
-
-  if (messages.length === 0) {
-    return null;
-  }
-
-  // Filter to user/assistant roles with text content, truncate to 500 chars
-  const result: AdjacentMessage[] = [];
-  for (const msg of messages) {
-    if (msg.role === "user" || msg.role === "assistant") {
-      const text = extractTextContent(msg.content_json);
-      if (text.trim()) {
-        result.push({
-          role: msg.role as "user" | "assistant",
-          text: text.length > 500 ? text.substring(0, 500) + "…" : text,
-          createdAt: msg.created_at,
-        });
-      }
-    }
-  }
-
-  return result.length > 0 ? result : null;
 }

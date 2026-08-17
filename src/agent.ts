@@ -29,7 +29,7 @@ export type ToolExecutor = (
   input: Record<string, unknown>
 ) => Promise<{ result: string; isError: boolean; terminatesLoop: boolean }>;
 
-export interface AgentOptions {
+interface AgentOptions {
   /** Override the model (defaults to config.claudeModel) */
   model?: string;
   /** Override workspace for loading SOUL.md/AGENTS.md */
@@ -145,7 +145,7 @@ export interface AgentResult {
   earlyTermination: boolean;
 }
 
-export interface StreamingCallbacks {
+interface StreamingCallbacks {
   /** Called with each new text chunk as it arrives */
   onTextDelta: (delta: string, accumulatedText: string) => void;
   /**

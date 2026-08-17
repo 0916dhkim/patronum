@@ -1,4 +1,4 @@
-import { EvalTest, EvalTestAssertions } from "./loader.js";
+import { EvalTest } from "./loader.js";
 import { ToolCallEntry } from "./interceptor.js";
 
 export interface AssertionResult {

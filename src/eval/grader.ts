@@ -11,7 +11,7 @@ export interface GradeResult {
  * Call Haiku to evaluate a single qualitative assertion.
  * Direct API call with no tools or tool loop.
  */
-export async function gradeAssertion(
+async function gradeAssertion(
   testName: string,
   testDescription: string,
   inputMessage: string,

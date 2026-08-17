@@ -65,7 +65,7 @@ function hasToolResults(message: Message): boolean {
   return Array.isArray(message.content) && message.content.some((block) => block.type === "tool_result");
 }
 
-export interface PrepareMessagesOptions {
+interface PrepareMessagesOptions {
   completedPrefixLength?: number;
   cacheInitialUserMessage?: boolean;
   cacheToolResults?: boolean;

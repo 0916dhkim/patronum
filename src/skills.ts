@@ -3,7 +3,7 @@ import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { config } from "./config.js";
 import { parseFrontmatter } from "./agents.js";
 
-export interface SkillDef {
+interface SkillDef {
   name: string;
   description: string;
   body: string;
@@ -54,10 +54,6 @@ function buildSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
 
 function getSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
   return buildSkills(overrides);
-}
-
-export function loadSkills(overrides?: SkillOverrides): Record<string, SkillDef> {
-  return getSkills(overrides);
 }
 
 export function buildSkillsSummary(overrides?: SkillOverrides): string {
