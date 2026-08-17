@@ -187,7 +187,7 @@ function normalizeItem(item) {
 
 function proxyToKagi(query, workflow, page, cb) {
   const dataKey = WORKFLOW_DATA[workflow];
-  const payload = JSON.stringify({ query: query, workflow: workflow, page: page, limit: PAGE_SIZE });
+  const payload = JSON.stringify({ query: query, workflow: workflow, page: page, limit: PAGE_SIZE, safe_search: false });
   const controller = new AbortController();
   let called = false;
   const timer = setTimeout(function () {
@@ -697,6 +697,33 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   }
   .pager button:disabled { opacity: 0.4; cursor: default; }
   .pager .page { color: var(--muted); font-size: 12px; }
+  .pager .seg {
+    display: flex;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .pager .seg button {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 7px 12px;
+  }
+  .pager .seg button:hover:not(:disabled) {
+    background: var(--border);
+  }
+  .pager .seg .mid {
+    color: var(--muted);
+    font-size: 12px;
+    padding: 0 14px;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    min-width: 68px;
+    text-align: center;
+    white-space: nowrap;
+  }
 
   /* ---- Result rows: idx / title+body / thumb ---- */
   .result {
@@ -765,9 +792,11 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 <main class="wrap">
   <div id="results" aria-live="polite"></div>
   <div class="pager" id="pager" hidden>
-    <button type="button" id="pager-prev" aria-label="Previous page">‹ prev</button>
-    <span class="page" id="pager-page">page 1</span>
-    <button type="button" id="pager-next" aria-label="Next page">next ›</button>
+    <div class="seg">
+      <button type="button" id="pager-prev" aria-label="Previous page">‹</button>
+      <span class="mid" id="pager-mid">1 / 10</span>
+      <button type="button" id="pager-next" aria-label="Next page">›</button>
+    </div>
   </div>
 </main>
 <script nonce="__NONCE__">
@@ -785,7 +814,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   var hasPrev = false;
   var catButtons = Array.prototype.slice.call(document.querySelectorAll("#cats button"));
   var pager = document.getElementById("pager");
-  var pageLabel = document.getElementById("pager-page");
+  var pagerMid = document.getElementById("pager-mid");
   var prevBtn = document.getElementById("pager-prev");
   var nextBtn = document.getElementById("pager-next");
 
@@ -925,7 +954,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       return;
     }
     pager.hidden = false;
-    pageLabel.textContent = "page " + page;
+    pagerMid.textContent = page + " / 10";
     prevBtn.disabled = !hasPrev;
     nextBtn.disabled = !hasNext;
   }
