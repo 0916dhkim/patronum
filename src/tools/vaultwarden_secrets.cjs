@@ -31,6 +31,7 @@ async function main() {
     { name: "Cognee PostgreSQL Production", key: "VECTOR_DB_PASSWORD" },
     { name: "Cognee Default User Password", key: "DEFAULT_USER_PASSWORD" },
     { name: "Cognee API Key v4", key: "COGNEE_API_KEY" },
+    { name: "Neo4j Local Production", key: "GRAPH_DATABASE_PASSWORD" },
   ];
 
   const results = [];
