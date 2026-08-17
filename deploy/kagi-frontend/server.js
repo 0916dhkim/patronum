@@ -28,7 +28,7 @@ const UPSTREAM_TIMEOUT_MS = 15000;
 const MAX_BODY_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_CONCURRENCY = 4;
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 const VALID_WORKFLOWS = ["search", "images", "videos", "news", "podcasts"];
 const WORKFLOW_DATA = {
   search: "search",
