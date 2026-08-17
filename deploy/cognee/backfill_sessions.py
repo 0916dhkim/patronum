@@ -314,10 +314,13 @@ def get_dataset_id(api_key: str) -> str | None:
 
 
 def forget_dataset(api_key: str) -> None:
+    # Forget deletes graph + relational + vector data and can take minutes on
+    # a large dataset — use a long per-call timeout (not the 30s default).
     r = http_json(
         "POST", "/api/v1/forget", api_key,
         headers={"Content-Type": "application/json"},
         json={"dataset": DATASET_NAME},
+        timeout=600,
     )
     if r.status_code not in (200, 204):
         raise RuntimeError(f"POST /forget -> {r.status_code}: {r.text[:200]}")
@@ -466,8 +469,9 @@ def session_qa_cache_count(session_id: str) -> int:
 def main() -> int:
     execute = "--execute" in sys.argv
     confirm_forget = "--yes-i-understand-forget" in sys.argv
-    if execute and not confirm_forget:
-        log("ERROR --execute requires --yes-i-understand-forget (destructive forget step)")
+    skip_forget = "--skip-forget" in sys.argv
+    if execute and not confirm_forget and not skip_forget:
+        log("ERROR --execute requires --yes-i-understand-forget (destructive forget step) unless --skip-forget")
         return 1
 
     api_key = fetch_api_key()
@@ -537,7 +541,12 @@ def main() -> int:
     # 2. Dataset: forget+recreate ONLY on a fresh rebuild (no checkpoint yet).
     # On resume runs the dataset already exists and was rebuilt in run 1 —
     # forgetting again would destroy the already-persisted sessions.
-    if pending_write and not done:
+    # --skip-forget: operator already wiped the backend manually; just ensure
+    # the dataset exists and proceed.
+    if skip_forget:
+        dataset_id = get_dataset_id(api_key) or recreate_dataset(api_key)
+        log(f"INFO skip-forget — dataset ready id={dataset_id}")
+    elif pending_write and not done:
         log(f"INFO first run — forget dataset={DATASET_NAME}")
         forget_dataset(api_key)
         log("INFO recreating dataset")
