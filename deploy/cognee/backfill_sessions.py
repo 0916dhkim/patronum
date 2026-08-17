@@ -356,7 +356,11 @@ def write_qa_entry(api_key: str, session_id: str, question: str, answer: str) ->
 
 
 def write_trace_entry(api_key: str, session_id: str, step: dict) -> bool:
-    """POST one TraceEntry (built by build_trace_steps) to the session cache."""
+    """POST one TraceEntry (built by build_trace_steps) to the session cache.
+
+    Uses a long timeout: every 10th trace write triggers an inline agent-context
+    LLM extraction server-side (cognee), which can exceed the 30s default.
+    """
     r = http_json(
         "POST", "/api/v1/remember/entry", api_key,
         headers={"Content-Type": "application/json"},
@@ -365,6 +369,7 @@ def write_trace_entry(api_key: str, session_id: str, step: dict) -> bool:
             "dataset_name": DATASET_NAME,
             "session_id": session_id,
         },
+        timeout=120,
     )
     if r.status_code == 200:
         return True
