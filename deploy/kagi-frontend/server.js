@@ -1007,6 +1007,19 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     doSearch(p);
   }
 
+  function scrollToTop() {
+    if (document.activeElement && document.activeElement !== input) {
+      try { document.activeElement.blur(); } catch (e) { /* ignore */ }
+    }
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    } catch (e) {
+      window.scrollTo(0, 0);
+    }
+  }
+
   function setControlsDisabled(disabled) {
     for (var i = 0; i < catButtons.length; i++) {
       catButtons[i].disabled = disabled;
@@ -1055,7 +1068,12 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       }
       renderPager();
       if (isPageNav) {
-        window.scrollTo(0, 0);
+        scrollToTop();
+        if (window.requestAnimationFrame) {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(scrollToTop);
+          });
+        }
       }
     }).catch(function (err) {
       if (mySeq !== seq) return;
