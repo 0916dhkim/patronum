@@ -33,11 +33,12 @@ import time
 
 # Reuse the battle-tested REST helpers and constants from the backfill script.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import backfill_sessions as bf  # noqa: E402
+
 from backfill_sessions import (  # noqa: E402
     COGNEE_URL,
     DATASET_NAME,
     CACHE_DB,
-    POLL_TIMEOUT_S,
     fetch_api_key,
     get_dataset_id,
     forget_dataset,
@@ -46,6 +47,10 @@ from backfill_sessions import (  # noqa: E402
     poll_dataset_status,
     log,
 )
+
+# Rebuild sessions are much larger than a day-scoped improve (hundreds of
+# trace steps each); extend the poll window per session to 90 minutes.
+bf.POLL_TIMEOUT_S = 5400
 
 CHECKPOINT_FILE = "/var/lib/patronum/cognee/.cognee_system/rebuild_graph_neo4j.checkpoint"
 
