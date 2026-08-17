@@ -963,6 +963,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     nextBtn.disabled = !hasNext;
   }
 
+  function updateTitle(q) {
+    document.title = q ? q + " · Kagi" : "Kagi";
+  }
+
   function buildUrl(q, w, p) {
     return "?q=" + encodeURIComponent(q) + "&wf=" + w + "&p=" + p;
   }
@@ -974,6 +978,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   function resetToStart() {
     history.replaceState(null, "", "/");
     input.value = "";
+    updateTitle("");
     workflow = "search";
     page = 1;
     hasNext = false;
@@ -1064,6 +1069,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       hasPrev = !!(data && data.has_prev);
       document.body.className = "results";
       input.value = query;
+      updateTitle(query);
       syncUrl(query, myWorkflow, page);
       if (myWorkflow === "images") {
         renderGrid(results, count);
