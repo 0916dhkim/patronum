@@ -74,7 +74,7 @@ def log(msg: str) -> None:
 def fetch_api_key() -> str | None:
     try:
         out = subprocess.run(
-            [NODE, VAULT_HELPER, "Cognee API Key (Current)", "password"],
+            [NODE, VAULT_HELPER, "Cognee API Key v4", "password"],
             cwd=WORKSPACE,
             capture_output=True,
             text=True,
