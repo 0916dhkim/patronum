@@ -28,6 +28,7 @@ const UPSTREAM_TIMEOUT_MS = 15000;
 const MAX_BODY_BYTES = 8192;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_CONCURRENCY = 4;
+const PAGE_SIZE = 10;
 const VALID_WORKFLOWS = ["search", "images", "videos", "news", "podcasts"];
 const WORKFLOW_DATA = {
   search: "search",
@@ -184,9 +185,9 @@ function normalizeItem(item) {
 
 // ---- Kagi upstream ----
 
-function proxyToKagi(query, workflow, cb) {
+function proxyToKagi(query, workflow, page, cb) {
   const dataKey = WORKFLOW_DATA[workflow];
-  const payload = JSON.stringify({ query: query, workflow: workflow });
+  const payload = JSON.stringify({ query: query, workflow: workflow, page: page, limit: PAGE_SIZE });
   const controller = new AbortController();
   let called = false;
   const timer = setTimeout(function () {
@@ -252,7 +253,15 @@ function proxyToKagi(query, workflow, cb) {
             const n = normalizeItem(it);
             if (n) results.push(n);
           }
-          callOnce(null, { ok: true, workflow: workflow, count: results.length, results: results });
+          callOnce(null, {
+            ok: true,
+            workflow: workflow,
+            page: page,
+            count: results.length,
+            has_next: items.length >= PAGE_SIZE && page < 10,
+            has_prev: page > 1,
+            results: results,
+          });
           return;
         }
         if (status === 401 || status === 403) {
@@ -337,12 +346,20 @@ function handleSearch(req, res, via) {
       finish(400, { ok: false, error: "invalid workflow" });
       return;
     }
+    let page = 1;
+    if (parsed.page !== undefined && parsed.page !== null) {
+      if (!Number.isInteger(parsed.page) || parsed.page < 1 || parsed.page > 10) {
+        finish(400, { ok: false, error: "page must be an integer between 1 and 10" });
+        return;
+      }
+      page = parsed.page;
+    }
     if (active >= MAX_CONCURRENCY) {
       finish(429, { ok: false, error: "Too many concurrent requests, try again shortly" }, { "Retry-After": "5" });
       return;
     }
     active++;
-    proxyToKagi(query, workflow, function (err, result) {
+    proxyToKagi(query, workflow, page, function (err, result) {
       active--;
       if (err) {
         finish(err.status, { ok: false, error: err.message });
@@ -610,7 +627,76 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   body.start #status { text-align: center; margin-top: 18px; width: min(640px, 88vw); }
   body.results #status { max-width: 760px; margin: 18px auto 14px; padding: 0 20px; }
   #status .ok { color: var(--accent); }
-  body.results .footer { color: var(--muted); font-size: 11px; margin-top: 26px; border-top: 1px solid var(--border); padding-top: 14px; }
+
+  /* ---- Category tabs ---- */
+  .cats { display: none; }
+  body.results .cats {
+    display: flex;
+    flex-wrap: wrap;
+    max-width: 760px;
+    margin: 14px auto 0;
+    padding: 0 20px;
+  }
+  .cats button {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    margin-left: -1px;
+  }
+  .cats button:first-child { margin-left: 0; border-radius: 8px 0 0 8px; }
+  .cats button:last-child { border-radius: 0 8px 8px 0; }
+  .cats button.on { background: var(--border); color: var(--text); font-weight: 700; }
+  .cats button:disabled { opacity: 0.4; cursor: default; }
+
+  /* ---- Image grid ---- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .cell { display: block; text-decoration: none; color: inherit; }
+  .cell img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    display: block;
+  }
+  .cell-title {
+    font-size: 12px;
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+
+  /* ---- Pager ---- */
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 22px;
+  }
+  .pager[hidden] { display: none; }
+  .pager button {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 13px;
+    cursor: pointer;
+  }
+  .pager button:disabled { opacity: 0.4; cursor: default; }
+  .pager .page { color: var(--muted); font-size: 12px; }
 
   /* ---- Result rows: idx / title+body / thumb ---- */
   .result {
@@ -646,6 +732,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     body.results .brand-results { display: none; }
     body.results .wrap { padding: 0 14px 70px; }
     body.results #status { padding: 0 14px; }
+    body.results .cats { padding: 0 14px; }
     .result { grid-template-areas: "idx title title" "idx body body"; }
     .result.has-thumb { grid-template-areas: "idx title title" "idx body thumb"; }
     .thumb { width: 60px; height: 60px; }
@@ -662,6 +749,13 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     <span class="go" aria-hidden="true">↵</span>
   </form>
 </header>
+<nav id="cats" class="cats" role="tablist" aria-label="Search categories">
+  <button type="button" role="tab" class="on" aria-selected="true" data-workflow="search">web</button>
+  <button type="button" role="tab" aria-selected="false" data-workflow="images">images</button>
+  <button type="button" role="tab" aria-selected="false" data-workflow="news">news</button>
+  <button type="button" role="tab" aria-selected="false" data-workflow="videos">videos</button>
+  <button type="button" role="tab" aria-selected="false" data-workflow="podcasts">podcasts</button>
+</nav>
 <div class="hints">
   <span><b>↵</b> search</span>
   <span><b>/</b> focus</span>
@@ -670,7 +764,11 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 <div id="status" class="status" aria-live="polite"></div>
 <main class="wrap">
   <div id="results" aria-live="polite"></div>
-  <div class="footer">no history · no cache · no tracking</div>
+  <div class="pager" id="pager" hidden>
+    <button type="button" id="pager-prev" aria-label="Previous page">‹ prev</button>
+    <span class="page" id="pager-page">page 1</span>
+    <button type="button" id="pager-next" aria-label="Next page">next ›</button>
+  </div>
 </main>
 <script nonce="__NONCE__">
 (function () {
@@ -681,18 +779,27 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   var resultsEl = document.getElementById("results");
   var seq = 0;
   var pending = false;
+  var workflow = "search";
+  var page = 1;
+  var hasNext = false;
+  var hasPrev = false;
+  var catButtons = Array.prototype.slice.call(document.querySelectorAll("#cats button"));
+  var pager = document.getElementById("pager");
+  var pageLabel = document.getElementById("pager-page");
+  var prevBtn = document.getElementById("pager-prev");
+  var nextBtn = document.getElementById("pager-next");
 
   function setStatusText(msg) {
     statusEl.textContent = msg || "";
   }
 
-  function setStatusCount(count) {
+  function setStatusCount(count, p) {
     statusEl.textContent = "";
     var ok = document.createElement("span");
     ok.className = "ok";
     ok.textContent = "✓ ";
     statusEl.appendChild(ok);
-    statusEl.appendChild(document.createTextNode(count + " results · cache: off"));
+    statusEl.appendChild(document.createTextNode(count + " results · page " + p + " · cache: off"));
   }
 
   function hostOf(url) {
@@ -703,17 +810,20 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     }
   }
 
+  function schemeOk(url) {
+    return typeof url === "string" && (url.indexOf("https://") === 0 || url.indexOf("http://") === 0);
+  }
+
   function renderResults(results, count) {
     resultsEl.textContent = "";
     if (!results || results.length === 0 || count === 0) {
       setStatusText("No results.");
       return;
     }
-    setStatusCount(count);
+    setStatusCount(count, page);
     for (var i = 0; i < results.length; i++) {
       var r = results[i];
-      var hasImage = typeof r.image === "string" &&
-        (r.image.indexOf("https://") === 0 || r.image.indexOf("http://") === 0);
+      var hasImage = schemeOk(r.image);
       var item = document.createElement("article");
       item.className = hasImage ? "result has-thumb" : "result";
 
@@ -727,7 +837,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       title.textContent = r.title;
       title.target = "_blank";
       title.rel = "noopener noreferrer";
-      if (typeof r.url === "string" && (r.url.indexOf("https://") === 0 || r.url.indexOf("http://") === 0)) {
+      if (schemeOk(r.url)) {
         title.href = r.url;
       }
       item.appendChild(title);
@@ -761,29 +871,138 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     }
   }
 
+  function renderGrid(results, count) {
+    resultsEl.textContent = "";
+    if (!results || results.length === 0 || count === 0) {
+      setStatusText("No results.");
+      return;
+    }
+    setStatusCount(count, page);
+    var grid = document.createElement("div");
+    grid.className = "grid";
+    for (var i = 0; i < results.length; i++) {
+      var r = results[i];
+      if (!schemeOk(r.image)) continue;
+      var cell = document.createElement("a");
+      cell.className = "cell";
+      cell.target = "_blank";
+      cell.rel = "noopener noreferrer";
+      if (schemeOk(r.url)) {
+        cell.href = r.url;
+      }
+      var img = document.createElement("img");
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.alt = r.title;
+      img.src = r.image;
+      cell.appendChild(img);
+      var t = document.createElement("div");
+      t.className = "cell-title";
+      t.textContent = r.title;
+      cell.appendChild(t);
+      grid.appendChild(cell);
+    }
+    resultsEl.appendChild(grid);
+  }
+
+  function updateTabs() {
+    for (var i = 0; i < catButtons.length; i++) {
+      var b = catButtons[i];
+      var active = b.getAttribute("data-workflow") === workflow;
+      if (active) {
+        b.classList.add("on");
+        b.setAttribute("aria-selected", "true");
+      } else {
+        b.classList.remove("on");
+        b.setAttribute("aria-selected", "false");
+      }
+    }
+  }
+
+  function renderPager() {
+    if (!hasPrev && !hasNext) {
+      pager.hidden = true;
+      return;
+    }
+    pager.hidden = false;
+    pageLabel.textContent = "page " + page;
+    prevBtn.disabled = !hasPrev;
+    nextBtn.disabled = !hasNext;
+  }
+
+  function buildUrl(q, w, p) {
+    return "?q=" + encodeURIComponent(q) + "&wf=" + w + "&p=" + p;
+  }
+
+  function syncUrl(q, w, p) {
+    history.replaceState(null, "", buildUrl(q, w, p));
+  }
+
   function resetToStart() {
+    history.replaceState(null, "", "/");
     input.value = "";
+    workflow = "search";
+    page = 1;
+    hasNext = false;
+    hasPrev = false;
+    updateTabs();
     document.body.className = "start";
     resultsEl.textContent = "";
     statusEl.textContent = "";
+    pager.hidden = true;
     seq++;
     pending = false;
     input.disabled = false;
+    setControlsDisabled(false);
     input.focus();
   }
 
-  function doSearch() {
+  function readBoot() {
+    var sp = new URLSearchParams(location.search);
+    var q = sp.get("q");
+    if (q) q = q.trim();
+    if (!q) return;
+    var w = sp.get("wf");
+    if (w !== "images" && w !== "videos" && w !== "news" && w !== "podcasts" && w !== "search") {
+      w = "search";
+    }
+    var p = parseInt(sp.get("p"), 10);
+    if (!(p >= 1 && p <= 10)) {
+      p = 1;
+    }
+    input.value = q;
+    workflow = w;
+    page = p;
+    updateTabs();
+    document.body.className = "results";
+    doSearch(p);
+  }
+
+  function setControlsDisabled(disabled) {
+    for (var i = 0; i < catButtons.length; i++) {
+      catButtons[i].disabled = disabled;
+    }
+    prevBtn.disabled = disabled || !hasPrev;
+    nextBtn.disabled = disabled || !hasNext;
+  }
+
+  function doSearch(p) {
     if (pending) return;
     var query = input.value.trim();
     if (!query) return;
+    if (typeof p === "number" && p >= 1 && p <= 10) {
+      page = p;
+    }
+    var myWorkflow = workflow;
     pending = true;
     input.disabled = true;
+    setControlsDisabled(true);
     var mySeq = ++seq;
     setStatusText("Searching…");
     fetch("/api/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, workflow: "search" })
+      body: JSON.stringify({ query: query, workflow: myWorkflow, page: page })
     }).then(function (resp) {
       if (resp.status === 403) throw { kind: "expired" };
       if (resp.status === 502 || resp.status === 504) throw { kind: "upstream" };
@@ -793,9 +1012,18 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       if (mySeq !== seq) return;
       var count = (data && typeof data.count === "number") ? data.count : 0;
       var results = (data && Array.isArray(data.results)) ? data.results : [];
+      if (data && typeof data.page === "number") page = data.page;
+      hasNext = !!(data && data.has_next);
+      hasPrev = !!(data && data.has_prev);
       document.body.className = "results";
       input.value = query;
-      renderResults(results, count);
+      syncUrl(query, myWorkflow, page);
+      if (myWorkflow === "images") {
+        renderGrid(results, count);
+      } else {
+        renderResults(results, count);
+      }
+      renderPager();
     }).catch(function (err) {
       if (mySeq !== seq) return;
       if (err && err.kind === "expired") {
@@ -809,13 +1037,37 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       if (mySeq !== seq) return;
       pending = false;
       input.disabled = false;
+      setControlsDisabled(false);
       input.focus();
     });
   }
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
-    doSearch();
+    page = 1;
+    doSearch(1);
+  });
+
+  for (var ci = 0; ci < catButtons.length; ci++) {
+    (function (btn) {
+      btn.addEventListener("click", function () {
+        var wf = btn.getAttribute("data-workflow");
+        if (wf === workflow) return;
+        workflow = wf;
+        page = 1;
+        updateTabs();
+        if (input.value.trim()) {
+          doSearch(1);
+        }
+      });
+    })(catButtons[ci]);
+  }
+
+  prevBtn.addEventListener("click", function () {
+    if (hasPrev) doSearch(page - 1);
+  });
+  nextBtn.addEventListener("click", function () {
+    if (hasNext) doSearch(page + 1);
   });
 
   document.addEventListener("keydown", function (e) {
@@ -828,6 +1080,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     }
   });
 
+  readBoot();
   input.focus();
 })();
 </script>
