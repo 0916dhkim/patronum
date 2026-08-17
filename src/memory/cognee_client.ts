@@ -85,8 +85,10 @@ export async function health(): Promise<boolean> {
 
 /**
  * Recall — high-level semantic search against Cognee.
- * Uses minimal request body { query, datasets } — Cognee selects the
- * optimal retrieval strategy (graph, vector, hybrid) automatically.
+ * Sends { query, datasets, only_context: true } so Cognee returns the
+ * retrieved context without running the LLM synthesis step. This trades
+ * a synthesized one-line answer for raw retrieved context (fast, but
+ * potentially large).
  *
  * Returns raw structured results from Cognee REST API, preserving
  * kind, metadata, data_id, and all provenance fields.
@@ -103,6 +105,7 @@ export async function recall(
     body: JSON.stringify({
       query,
       datasets: [DATASET_NAME],
+      only_context: true,
     }),
     signal: AbortSignal.timeout(TIMEOUT_RECALL),
   });

@@ -59,8 +59,9 @@ export const memorySearchTool: ToolHandler = {
       const up = await cogneeHealth();
       if (up) {
         try {
-          // High-level recall: minimal { query, datasets } request body.
-          // No forced search_type/only_context/top_k — Cognee chooses strategy.
+          // High-level recall: { query, datasets, only_context: true }.
+          // only_context skips Cognee's LLM synthesis so we get raw
+          // retrieved context fast; we do the final synthesis ourselves.
           const results = await recall(query);
 
           if (results.length === 0) {
