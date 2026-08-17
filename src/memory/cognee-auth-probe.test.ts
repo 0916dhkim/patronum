@@ -99,7 +99,7 @@ async function main() {
   await run("A5: vaultwarden_secrets.cjs uses same item name as config.ts", async () => {
     const fs = await import("node:fs");
     const secretsContent = fs.readFileSync(
-      "/var/lib/patronum/source/dist/tools/vaultwarden_secrets.cjs",
+      "/var/lib/patronum/source/src/tools/vaultwarden_secrets.cjs",
       "utf-8"
     );
     const secretsNameMatch = secretsContent.match(/name:\s*"([^"]+)"[^}]*key:\s*"COGNEE_API_KEY"/);

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-tool-assets.mjs",
     "start": "node dist/index.js"
   },
   "dependencies": {
