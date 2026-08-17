@@ -753,6 +753,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     display: block;
   }
 
+  @media (pointer: coarse) {
+    body.start .hints { display: none; }
+  }
+
   @media (max-width: 480px) {
     body.start .hints { flex-wrap: wrap; gap: 10px; justify-content: center; }
     body.results .topbar { padding: 10px 14px; gap: 10px; }
