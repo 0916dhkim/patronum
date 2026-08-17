@@ -12,3 +12,4 @@ MEMORY.md
 tests/
 !src/tests/
 skills/
+__pycache__/
