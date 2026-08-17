@@ -1015,7 +1015,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     nextBtn.disabled = disabled || !hasNext;
   }
 
-  function doSearch(p) {
+  function doSearch(p, fromPager) {
     if (pending) return;
     var query = input.value.trim();
     if (!query) return;
@@ -1023,6 +1023,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       page = p;
     }
     var myWorkflow = workflow;
+    var isPageNav = !!fromPager;
     pending = true;
     input.disabled = true;
     setControlsDisabled(true);
@@ -1053,6 +1054,9 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         renderResults(results, count);
       }
       renderPager();
+      if (isPageNav) {
+        window.scrollTo(0, 0);
+      }
     }).catch(function (err) {
       if (mySeq !== seq) return;
       if (err && err.kind === "expired") {
@@ -1067,7 +1071,9 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
       pending = false;
       input.disabled = false;
       setControlsDisabled(false);
-      input.focus();
+      if (!isPageNav) {
+        input.focus();
+      }
     });
   }
 
@@ -1093,10 +1099,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
   }
 
   prevBtn.addEventListener("click", function () {
-    if (hasPrev) doSearch(page - 1);
+    if (hasPrev) doSearch(page - 1, true);
   });
   nextBtn.addEventListener("click", function () {
-    if (hasNext) doSearch(page + 1);
+    if (hasNext) doSearch(page + 1, true);
   });
 
   document.addEventListener("keydown", function (e) {
